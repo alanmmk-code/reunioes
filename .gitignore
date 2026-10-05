@@ -1,0 +1,7 @@
+.venv/
+.env
+credentials.json
+token.json
+atas/
+__pycache__/
+reunioes.log
