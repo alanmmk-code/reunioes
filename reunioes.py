@@ -19,9 +19,14 @@ import analisador
 import atas
 import config
 import google_services as g
+import gravador
 
 app = Flask(__name__)
 app.secret_key = "reunioes-local"
+
+GRAVADOR = gravador.Gravador()
+# Andamento do processamento depois que a gravação para (transcrição -> ata)
+TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None, "titulo": "", "transcricao_salva": None}
 
 
 # ---------------------------------------------------------------- Lógica principal
@@ -56,6 +61,27 @@ def enviar_ata(event_id: str, destinatarios: list[str]) -> None:
     g.enviar_email(destinatarios, f"Ata: {ata.titulo}", html)
     reg["email_enviado_para"] = sorted(set(reg["email_enviado_para"]) | set(destinatarios))
     atas.salvar(event_id, reg)
+
+
+def processar_gravacao(reuniao: dict, arquivos: dict) -> None:
+    """Roda em segundo plano: Whisper -> Claude -> Google Doc."""
+    TAREFA.update(ativa=True, etapa="Transcrevendo o áudio", pct=0, erro=None, transcricao_salva=None,
+                  event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
+    try:
+        texto = gravador.transcrever(arquivos, progresso=lambda p: TAREFA.update(pct=p))
+        if not texto:
+            raise RuntimeError("Nenhuma fala foi reconhecida no áudio gravado.")
+        # Guarda a transcrição antes de chamar o Claude, para não perdê-la se algo falhar
+        txt = next(iter(arquivos.values())).with_suffix(".txt")
+        txt.write_text(texto, encoding="utf-8")
+        TAREFA.update(etapa="Escrevendo a ata com o Claude", pct=100, transcricao_salva=str(txt))
+        processar(reuniao, texto, f"Gravação no PC + Whisper ({config.WHISPER_MODELO})")
+        TAREFA.update(etapa="Concluído")
+    except Exception as e:
+        traceback.print_exc()
+        TAREFA.update(erro=str(e))
+    finally:
+        TAREFA["ativa"] = False
 
 
 def modo_auto() -> None:
@@ -131,6 +157,9 @@ def inicio():
     return pagina(
         """<h1>Minhas reuniões do Meet</h1>
 <p class="mut">Últimos 7 dias e próximos 7 dias da sua agenda.</p>
+{% if gravando or tarefa.ativa %}<div class="card row" style="border-color:#d93025"><div>
+<b style="color:#d93025">{% if gravando %}● Gravando{% else %}⏳ Processando gravação{% endif %}</b></div>
+<a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
 <h2>Já aconteceram</h2>
 {% for r in passadas %}<div class="card row"><div><b>{{ r.titulo }}</b><br>
 <span class="mut">{{ r.inicio[:16].replace('T',' ') }} · {{ r.participantes|length }} convidados</span></div><div>
@@ -142,13 +171,77 @@ def inicio():
 <h2>Próximas</h2>
 {% for r in futuras %}<div class="card row"><div><b>{{ r.titulo }}</b><br>
 <span class="mut">{{ r.inicio[:16].replace('T',' ') }}</span></div>
-<a class="btn" href="{{ r.link }}" target="_blank">Entrar no Meet</a></div>
+<div>{% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id=r.id) }}"
+onsubmit="window.open('{{ r.link }}','_blank')"><button>● Entrar e gravar</button></form>{% endif %}
+<a class="btn sec" href="{{ r.link }}" target="_blank">Só entrar</a></div></div>
 {% else %}<p class="mut">Nada agendado.</p>{% endfor %}
 <h2>Reunião fora da agenda</h2>
-<p><a href="{{ url_for('manual', event_id='avulsa') }}">Colar uma transcrição avulsa</a></p>""",
+<p>{% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id='avulsa') }}">
+<button class="sec">● Gravar agora</button></form> ·{% endif %}
+<a href="{{ url_for('manual', event_id='avulsa') }}">Colar uma transcrição avulsa</a></p>""",
         passadas=passadas,
         futuras=futuras,
         feitas=feitas,
+        gravando=GRAVADOR.ativo,
+        tarefa=TAREFA,
+    )
+
+
+@app.post("/gravar/<event_id>")
+def gravar(event_id):
+    if TAREFA["ativa"]:
+        flash("Aguarde terminar o processamento da gravação anterior.")
+        return redirect(url_for("gravacao"))
+    if event_id == "avulsa":
+        reuniao = {"id": f"avulsa-{datetime.now():%Y%m%d%H%M%S}", "titulo": "Reunião gravada",
+                   "inicio": datetime.now().isoformat(timespec="minutes"), "descricao": "", "participantes": []}
+    else:
+        reuniao = g.obter_reuniao(event_id)
+    try:
+        GRAVADOR.iniciar(reuniao)
+    except Exception as e:
+        traceback.print_exc()
+        flash(f"Não consegui iniciar a gravação: {e}")
+        return redirect(url_for("inicio"))
+    return redirect(url_for("gravacao"))
+
+
+@app.post("/parar")
+def parar():
+    if GRAVADOR.ativo:
+        try:
+            reuniao, arquivos = GRAVADOR.parar()
+            TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=reuniao["id"])
+            threading.Thread(target=processar_gravacao, args=(reuniao, arquivos), daemon=True).start()
+        except Exception as e:
+            flash(str(e))
+    return redirect(url_for("gravacao"))
+
+
+@app.route("/gravacao")
+def gravacao():
+    if not GRAVADOR.ativo and not TAREFA["ativa"] and not TAREFA["erro"] and TAREFA["event_id"]:
+        if atas.carregar(TAREFA["event_id"]):
+            return redirect(url_for("ver_ata", event_id=TAREFA["event_id"]))
+    return pagina(
+        """{% if gravando %}<meta http-equiv="refresh" content="5">
+<h1 style="color:#d93025">● Gravando</h1><p><b>{{ titulo }}</b> · {{ duracao }}</p>
+<p class="mut">Gravando seu microfone e o áudio da chamada. Pode minimizar esta página.
+Use <b>fone de ouvido</b> para a transcrição separar melhor quem falou.</p>
+<form method="post" action="{{ url_for('parar') }}" data-espera="Parando…"><button>■ Parar e gerar ata</button></form>
+{% elif tarefa.ativa %}<meta http-equiv="refresh" content="3">
+<h1>⏳ {{ tarefa.etapa }}…</h1>
+{% if tarefa.etapa.startswith('Transcrevendo') %}<p>{{ tarefa.pct }}% concluído</p>
+<p class="mut">No primeiro uso o Whisper baixa o modelo de voz (alguns minutos). A transcrição roda no seu PC
+e leva aproximadamente de 1/4 a 1/2 da duração da reunião.</p>{% endif %}
+{% elif tarefa.erro %}<h1>Algo deu errado</h1><p>{{ tarefa.erro }}</p>
+{% if tarefa.transcricao_salva %}<p class="mut">A transcrição foi salva em {{ tarefa.transcricao_salva }}.
+Você pode colá-la em "Colar transcrição".</p>{% endif %}
+{% else %}<h1>Nenhuma gravação em andamento</h1>{% endif %}""",
+        gravando=GRAVADOR.ativo,
+        titulo=(GRAVADOR.reuniao or {}).get("titulo", ""),
+        duracao=GRAVADOR.duracao(),
+        tarefa=TAREFA,
     )
 
 

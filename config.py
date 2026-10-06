@@ -19,6 +19,12 @@ TOKEN_FILE = BASE_DIR / "token.json"  # gerado no primeiro login
 ATAS_DIR = BASE_DIR / "atas"
 ATAS_DIR.mkdir(exist_ok=True)
 
+# Gravação local + transcrição com Whisper (para contas sem transcrição do Meet)
+GRAVACOES_DIR = BASE_DIR / "gravacoes"
+GRAVACOES_DIR.mkdir(exist_ok=True)
+WHISPER_MODELO = os.getenv("WHISPER_MODELO", "small")  # tiny, base, small, medium, large-v3-turbo
+SEU_NOME = os.getenv("SEU_NOME", "Eu")
+
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",  # ler agenda e agendar follow-ups
     "https://www.googleapis.com/auth/drive.readonly",  # ler transcrições do Meet

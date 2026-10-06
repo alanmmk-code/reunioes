@@ -60,6 +60,20 @@ Abre o painel em http://localhost:5055:
 - Na ata → *Enviar por e-mail* e *Agendar próxima reunião no Meet* (já com pauta e convidados).
 - **Próximas** → atalho para entrar no Meet.
 
+### Gravar a reunião no PC (contas sem transcrição do Meet)
+
+Em contas Google pessoais o Meet não gera transcrição. Nesse caso, use **● Entrar e gravar** (abre o Meet
+e começa a gravar) ou **● Gravar agora** para uma reunião fora da agenda. Ao final, clique em
+**■ Parar e gerar ata**: o áudio é transcrito no próprio PC com o Whisper e a ata é gerada normalmente.
+
+- São gravadas duas trilhas: seu **microfone** (marcado com `SEU_NOME`) e o **áudio da chamada**
+  ("Outros participantes"). Use **fone de ouvido** para separar melhor quem falou; sem fone, as falas
+  que vazam do alto-falante para o microfone são filtradas automaticamente.
+- A transcrição roda no PC (o áudio não sai da máquina). No primeiro uso o modelo é baixado (~480 MB).
+- `WHISPER_MODELO` no `.env`: `small` (padrão) é rápido; `medium` ou `large-v3-turbo` são mais precisos
+  e mais lentos.
+- Os áudios e transcrições ficam em `gravacoes/`. Apague os antigos quando quiser liberar espaço.
+
 ### Abrir junto com o Windows
 
 Já configurado: o atalho `Assistente de Reunioes` na pasta Inicializar do Windows (`Win+R` → `shell:startup`)
