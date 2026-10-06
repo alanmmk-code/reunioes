@@ -59,6 +59,7 @@ a.stat:hover{border-color:var(--pri)}
 .lista-r .r{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 16px;border-bottom:1px solid var(--bd);flex-wrap:wrap}
 .lista-r .r:last-child{border-bottom:0}
 .lista-r .r .btn,.lista-r .r button{padding:4px 10px;font-size:12.5px}
+.del-btn{color:var(--err)!important}.del-btn:hover{background:var(--err-s)!important;border-color:var(--err)!important}
 .rodape{padding:12px 16px;border-top:1px solid var(--bd);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 </style>
 
@@ -143,8 +144,11 @@ a.stat:hover{border-color:var(--pri)}
 <div class="box-h"><h2>Reuniões recentes</h2></div>
 {% for r in recentes[:6] %}<div class="r"><div><b style="font-weight:500">{{ r.titulo }}</b><br><span class="mut">{{ r.inicio[8:10] }}/{{ r.inicio[5:7] }} {{ r.inicio[11:16] }}</span></div>
 <div>{% if r.id in feitas %}<span class="tag ok">Ata pronta</span> <a class="btn sec" href="{{ url_for('ver_ata', event_id=r.id) }}">Ver</a>
+<a class="btn sec del-btn" href="{{ url_for('ata_excluir', event_id=r.id) }}" title="Excluir a ata">×</a>
 {% else %}<form class="inline" method="post" action="{{ url_for('gerar', event_id=r.id) }}" data-espera="Gerando…"><button>Gerar ata</button></form>
-<a class="btn sec" href="{{ url_for('manual', event_id=r.id) }}">Colar</a>{% endif %}</div></div>
+<a class="btn sec" href="{{ url_for('manual', event_id=r.id) }}">Colar</a>
+<form class="inline" method="post" action="{{ url_for('evento_ocultar', event_id=r.id) }}" onsubmit="return confirm('Remover esta reunião da lista? O evento continua no Google Agenda.')">
+<button class="sec del-btn" title="Remover da lista">×</button></form>{% endif %}</div></div>
 {% else %}<div class="r mut">Nenhuma reunião do Meet nas últimas 2 semanas.</div>{% endfor %}
 </section>
 </div>
@@ -207,7 +211,8 @@ a.stat:hover{border-color:var(--pri)}
 {% if m.acoes_cliente %}<b class="rot">Ficou com o cliente</b><ul>{% for x in m.acoes_cliente %}<li>{{ x.tarefa }} <span class="mut">· {{ x.responsavel }}</span></li>{% endfor %}</ul>{% endif %}
 <div class="ac"><a class="btn" href="{{ url_for('ver_ata', event_id=m.event_id) }}">Ver ata</a>
 {% if m.doc_link and m.doc_link.startswith('http') %}<a class="btn sec" href="{{ m.doc_link }}" target="_blank">Google Doc</a>{% endif %}
-{% if grp.cliente_id is none %}<a class="btn sec" href="{{ url_for('ver_ata', event_id=m.event_id) }}">Definir cliente</a>{% endif %}</div>
+{% if grp.cliente_id is none %}<a class="btn sec" href="{{ url_for('ver_ata', event_id=m.event_id) }}">Definir cliente</a>{% endif %}
+<a class="btn sec del-btn" href="{{ url_for('ata_excluir', event_id=m.event_id) }}">Excluir</a></div>
 </div></details>
 {% endfor %}
 </div></details>

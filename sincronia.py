@@ -28,6 +28,39 @@ _lock = threading.Lock()
 _agendada = threading.Event()
 
 
+EXCLUIDOS_ARQ = config.DADOS_DIR / "excluidos.json"  # o que foi excluído (vale para todos os PCs)
+
+
+def excluidos() -> dict:
+    try:
+        return json.loads(EXCLUIDOS_ARQ.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def marcar_excluido(*nomes: str) -> None:
+    """Registra exclusões (nomes como ficam no Drive: ata__<id>.json, grav__<arquivo>, evento__<id>),
+    para os outros PCs apagarem as cópias deles e ninguém reenviar o que foi excluído."""
+    lista = excluidos()
+    for nome in nomes:
+        lista[nome] = db.agora()
+    EXCLUIDOS_ARQ.write_text(json.dumps(lista, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _apagar_local(nome: str) -> bool:
+    """Apaga a cópia local correspondente a um nome do Drive."""
+    if nome.startswith("ata__"):
+        caminho = config.ATAS_DIR / nome[len("ata__"):]
+    elif nome.startswith("grav__"):
+        caminho = config.GRAVACOES_DIR / nome[len("grav__"):]
+    else:
+        return False
+    if caminho.exists():
+        caminho.unlink()
+        return True
+    return False
+
+
 def _mtime(caminho) -> str:
     return datetime.fromtimestamp(os.path.getmtime(caminho), timezone.utc).isoformat(timespec="milliseconds")
 
@@ -60,7 +93,25 @@ def sincronizar() -> str:
 def _sincronizar() -> str:
     pasta = g.drive_pasta(config.PASTA_DRIVE)
     remotos = g.drive_listar(pasta)
-    enviados = baixados = 0
+    enviados = baixados = apagados = 0
+
+    # 0) Exclusões: junta a lista dos dois lados e apaga o que foi excluído, aqui e no Drive
+    lista = excluidos()
+    remoto_exc = remotos.get("excluidos.json")
+    texto_exc_remoto = g.drive_baixar(remoto_exc["id"]).decode("utf-8") if remoto_exc else None
+    if texto_exc_remoto:
+        for nome, quando in json.loads(texto_exc_remoto).items():
+            lista[nome] = max(quando, lista.get(nome, ""))
+    texto_exc = json.dumps(lista, ensure_ascii=False, sort_keys=True)
+    EXCLUIDOS_ARQ.write_text(json.dumps(lista, ensure_ascii=False, indent=1), encoding="utf-8")
+    for nome in lista:
+        if nome in remotos:
+            g.drive_apagar(remotos.pop(nome)["id"])
+            apagados += 1
+        if _apagar_local(nome):
+            apagados += 1
+    if texto_exc_remoto != texto_exc:
+        g.drive_enviar(pasta, "excluidos.json", texto_exc.encode("utf-8"), file_id=remoto_exc["id"] if remoto_exc else None)
 
     # 1) Clientes e tarefas: mescla e publica o resultado
     remoto_dados = remotos.get("dados.json")
@@ -77,7 +128,7 @@ def _sincronizar() -> str:
 
     # 2) Atas: a versão mais recente vence
     locais = {f"ata__{p.stem}.json": p for p in config.ATAS_DIR.glob("*.json")}
-    for nome in set(locais) | {n for n in remotos if n.startswith("ata__")}:
+    for nome in (set(locais) | {n for n in remotos if n.startswith("ata__")}) - set(lista):
         local, remoto = locais.get(nome), remotos.get(nome)
         quando_local = (_json_local(local).get("atualizado_em") or _mtime(local)) if local else ""
         quando_remoto = (remoto or {}).get("appProperties", {}).get("atualizado_em", "")
@@ -95,7 +146,7 @@ def _sincronizar() -> str:
     # 3) Gravações: pendências (.json), transcrições (.txt) e, se ligado, áudios (.wav)
     extensoes = (".json", ".txt") + ((".wav",) if config.SINCRONIZAR_AUDIO else ())
     locais = {f"grav__{p.name}": p for p in config.GRAVACOES_DIR.iterdir() if p.suffix in extensoes}
-    for nome in set(locais) | {n for n in remotos if n.startswith("grav__") and n.endswith(extensoes)}:
+    for nome in (set(locais) | {n for n in remotos if n.startswith("grav__") and n.endswith(extensoes)}) - set(lista):
         local, remoto = locais.get(nome), remotos.get(nome)
         if nome.endswith(".json"):
             quando_local = (_json_local(local).get("atualizado_em") or _mtime(local)) if local else ""
@@ -120,6 +171,8 @@ def _sincronizar() -> str:
         config.CREDENTIALS_FILE.write_bytes(g.drive_baixar(remotos["config__credentials.json"]["id"]))
 
     partes = []
+    if apagados:
+        partes.append(f"{apagados} item(ns) excluído(s)")
     if mudancas:
         partes.append(f"{mudancas} tarefa(s)/cliente(s) atualizados")
     if baixados:

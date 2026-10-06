@@ -312,6 +312,23 @@ def drive_baixar(file_id: str, destino=None) -> bytes | None:
     return None
 
 
+def drive_apagar(file_id: str) -> None:
+    """Apaga de vez um arquivo de dados do app (cópia de sincronização)."""
+    _svc("drive", "v3").files().delete(fileId=file_id).execute()
+
+
+def drive_lixeira(file_id: str) -> None:
+    """Manda para a lixeira do Drive (dá para recuperar por 30 dias)."""
+    _svc("drive", "v3").files().update(fileId=file_id, body={"trashed": True}).execute()
+
+
+def id_do_link(link: str) -> str | None:
+    """Extrai o id de um link do Google Docs/Drive."""
+    import re
+    m = re.search(r"/d/([A-Za-z0-9_-]{20,})", link or "")
+    return m.group(1) if m else None
+
+
 def enviar_email(destinatarios: list[str], assunto: str, html: str) -> None:
     msg = MIMEMultipart("alternative")
     msg["To"] = ", ".join(destinatarios)

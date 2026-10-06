@@ -473,7 +473,9 @@ def inicio():
     ini_semana = datetime.combine(segunda, datetime.min.time(), agora.tzinfo)
     try:
         eventos = g.listar_eventos(ini_semana, ini_semana + timedelta(days=7))
-        recentes = [r for r in g.listar_reunioes(dias_atras=14, dias_frente=0) if r["ja_terminou"]][::-1]
+        ocultos = {n[len("evento__"):] for n in sincronia.excluidos() if n.startswith("evento__")}
+        recentes = [r for r in g.listar_reunioes(dias_atras=14, dias_frente=0)
+                    if r["ja_terminou"] and r["id"] not in ocultos][::-1]
         # compromissos de hoje: vêm da própria semana exibida; em outra semana, busca só o dia de hoje
         eventos_de_hoje = eventos if semana == 0 else g.listar_eventos(
             datetime.combine(hoje, datetime.min.time(), agora.tzinfo), datetime.combine(hoje + timedelta(days=1), datetime.min.time(), agora.tzinfo))
@@ -680,10 +682,9 @@ def pendente_gerar(pid):
 def pendente_descartar(pid):
     p = carregar_pendente(pid)
     if p:
-        for c in _audios_da_pendente(p).values():
-            c.unlink(missing_ok=True)
+        excluir_arquivos_da_gravacao(pid)
         _resolver_pendente(pid, p, "descartada")
-        flash("Áudio apagado.")
+        flash("Gravação apagada deste PC e do Google Drive.")
     return redirect(url_for("inicio"))
 
 
@@ -781,7 +782,8 @@ def ver_ata(event_id):
         """<h1>{{ a.titulo }}</h1>
 <p class="mut">{{ r.inicio[:16].replace('T',' ') }} · transcrição: {{ reg.origem_transcricao }}</p>
 <form method="post" action="{{ url_for('ata_cliente', event_id=event_id) }}" class="row" style="justify-content:flex-start"><span>Cliente:</span> {{ seletor_cliente(reg.cliente_id)|safe }} <button class="sec">Salvar</button>{% if not reg.cliente_id %}<span class="mut">defina o cliente para as tarefas aparecerem no lugar certo</span>{% endif %}</form>
-<p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a> <a class="btn sec" href="{{ url_for('tarefas', ver='todas') }}">Ver tarefas</a></p>
+<p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a> <a class="btn sec" href="{{ url_for('tarefas', ver='todas') }}">Ver tarefas</a>
+<a class="btn sec" href="{{ url_for('ata_excluir', event_id=event_id) }}" style="color:var(--err)">Excluir ata</a></p>
 <div class="card"><h2 style="margin-top:0">Resumo</h2><p>{{ a.resumo }}</p>
 <p class="mut">Participantes: {{ a.participantes|join(', ') }}</p></div>
 <div class="card"><h2 style="margin-top:0">Decisões</h2><ul>{% for d in a.decisoes %}<li>{{ d }}</li>{% else %}<li class="mut">Nenhuma</li>{% endfor %}</ul></div>
@@ -840,6 +842,86 @@ def followup(event_id):
     except Exception as e:
         flash(f"Erro ao agendar: {e}")
     return redirect(url_for("ver_ata", event_id=event_id))
+
+
+# ---------------------------------------------------------------- Exclusões
+
+def excluir_arquivos_da_gravacao(pid: str) -> list[str]:
+    """Apaga áudios e transcrição de uma gravação (não o .json, que guarda a decisão para os outros PCs)."""
+    nomes = []
+    for arq in config.GRAVACOES_DIR.glob(f"{pid}*"):
+        if arq.suffix in (".wav", ".txt"):
+            arq.unlink(missing_ok=True)
+            nomes.append(f"grav__{arq.name}")
+    if nomes:
+        sincronia.marcar_excluido(*nomes)
+        sincronia.agendar()
+    return nomes
+
+
+def excluir_ata(event_id: str, com_tarefas: bool) -> dict:
+    """Apaga a ata daqui, do Drive (cópia de sincronização) e manda o Google Doc para a lixeira."""
+    reg = atas.carregar(event_id) or {}
+    resultado = {"doc": None, "tarefas": 0}
+    doc_id = g.id_do_link(reg.get("doc_link", ""))
+    if doc_id:
+        try:
+            g.drive_lixeira(doc_id)
+            resultado["doc"] = "lixeira"
+        except Exception as e:
+            resultado["doc"] = f"não consegui mandar para a lixeira ({e})"
+    atas._arquivo(event_id).unlink(missing_ok=True)
+    if com_tarefas:
+        resultado["tarefas"] = db.excluir_tarefas_da_ata(event_id)
+    sincronia.marcar_excluido(f"ata__{event_id}.json")
+    sincronia.agendar()
+    return resultado
+
+
+@app.route("/ata/<event_id>/excluir", methods=["GET", "POST"])
+def ata_excluir(event_id):
+    reg = atas.carregar(event_id)
+    if not reg:
+        flash("Essa ata já não existe.")
+        return redirect(url_for("inicio"))
+    abertas = [t for t in db.tarefas() if t["origem_ata"] == event_id]
+    if request.method == "POST":
+        res = excluir_ata(event_id, request.form.get("tarefas") == "1")
+        partes = ["Ata excluída deste PC e do Google Drive"]
+        if res["doc"] == "lixeira":
+            partes.append("o Google Doc foi para a lixeira do Drive (dá para recuperar por 30 dias)")
+        elif res["doc"]:
+            partes.append(f"Google Doc: {res['doc']}")
+        if res["tarefas"]:
+            partes.append(f"{res['tarefas']} tarefa(s) da reunião excluída(s)")
+        flash("; ".join(partes) + ".")
+        return redirect(url_for("inicio"))
+    return pagina(
+        """<h1>Excluir a ata?</h1>
+<div class="card"><b>{{ reg.ata.titulo }}</b> <span class="mut">· {{ reg.reuniao.inicio[:16].replace('T',' ') }}</span>
+<p class="mut" style="margin:8px 0 0">{{ (reg.ata.resumo or '')[:300] }}</p></div>
+<p>Vai ser apagado:</p>
+<ul><li>a ata deste PC e a cópia na pasta do Google Drive (e dos outros PCs, na próxima sincronização);</li>
+{% if reg.doc_link and reg.doc_link.startswith('http') %}<li>o <b>Google Doc</b> da ata, que vai para a <b>lixeira do Drive</b> (dá para recuperar por 30 dias).</li>{% endif %}</ul>
+<form method="post">
+{% if abertas %}<label style="display:flex;gap:8px;align-items:flex-start;margin:12px 0">
+<input type="checkbox" name="tarefas" value="1" checked style="width:auto;margin-top:4px">
+<span>Excluir também as <b>{{ abertas|length }} tarefa(s) em aberto</b> que vieram desta reunião:
+<span class="mut">{{ abertas|map(attribute='descricao')|join('; ') }}</span></span></label>{% endif %}
+<div class="row" style="justify-content:flex-start">
+<button style="background:var(--err)">Excluir</button>
+<a class="btn sec" href="{{ url_for('inicio') }}">Cancelar</a></div></form>""",
+        reg=reg, abertas=abertas,
+    )
+
+
+@app.post("/evento/<event_id>/ocultar")
+def evento_ocultar(event_id):
+    """Tira uma reunião sem ata da lista de recentes (o evento continua no Google Agenda)."""
+    sincronia.marcar_excluido(f"evento__{event_id}")
+    sincronia.agendar()
+    flash("Reunião removida da lista. O evento continua no seu Google Agenda.")
+    return redirect(request.referrer or url_for("inicio"))
 
 
 # ---------------------------------------------------------------- Resumo pré-reunião

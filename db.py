@@ -167,6 +167,13 @@ def atualizar_tarefa(tarefa_id: int, **campos) -> None:
                     (*campos.values(), tarefa_id))
 
 
+def excluir_tarefas_da_ata(event_id: str) -> int:
+    """Exclui (marcando) as tarefas em aberto que vieram de uma reunião. Devolve quantas."""
+    with conexao() as con:
+        return con.execute("UPDATE tarefas SET excluido = 1, atualizado_em = ? "
+                           "WHERE origem_ata = ? AND status != 'feito' AND excluido = 0", (agora(), event_id)).rowcount
+
+
 def excluir_tarefa(tarefa_id: int) -> None:
     with conexao() as con:
         con.execute("UPDATE tarefas SET excluido = 1, atualizado_em = ? WHERE id = ?", (agora(), tarefa_id))

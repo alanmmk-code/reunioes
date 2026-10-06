@@ -158,6 +158,16 @@ ou pelo botão **Sincronizar** no topo do painel):
 - **Áudios não vão para o Drive por padrão** (cerca de 230 MB por hora). Se a ata for gerada em outro PC,
   ele usa a transcrição feita ao vivo. Para enviar os áudios também: `SINCRONIZAR_AUDIO=sim` no `.env`.
 
+### Excluir
+
+- **Ata**: botão **Excluir** no histórico por cliente, **×** em "Reuniões recentes" ou **Excluir ata** na página
+  da ata. Abre uma confirmação e apaga a ata deste PC e da pasta do Google Drive; o **Google Doc** da ata vai
+  para a **lixeira do Drive** (recuperável por 30 dias). Opcionalmente exclui as tarefas em aberto da reunião.
+- **Gravação**: "Não, apagar o áudio" na tela "Gerar ata?" apaga áudios e transcrição daqui e do Drive.
+- **Reunião sem ata** em "Reuniões recentes": o **×** só tira da lista (o evento continua no Google Agenda).
+- As exclusões valem em **todos os PCs**: ficam registradas em `excluidos.json` no Drive, e cada PC apaga a
+  própria cópia na sincronização seguinte (nada excluído volta).
+
 ### Abrir junto com o Windows
 
 Já configurado: o atalho `Assistente de Reunioes` na pasta Inicializar do Windows (`Win+R` → `shell:startup`)
