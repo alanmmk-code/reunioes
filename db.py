@@ -84,6 +84,25 @@ def criar_tabelas() -> None:
                 excluido INTEGER NOT NULL DEFAULT 0
             )"""
         )
+        # uuid de cliente que foi unido a outro -> uuid que ficou (sincronizado entre PCs)
+        con.execute("CREATE TABLE IF NOT EXISTS clientes_alias (uuid TEXT PRIMARY KEY, para TEXT NOT NULL)")
+
+
+# ---------------------------------------------------------------- validação
+
+class ClienteDuplicado(ValueError):
+    """Já existe outro cliente com esse nome."""
+
+
+def _id(valor) -> int | None:
+    """Id válido do SQLite, ou None (texto, vazio, dígitos estranhos, número gigante)."""
+    if isinstance(valor, bool):
+        return None
+    try:
+        numero = int(str(valor).strip()) if not isinstance(valor, int) else valor
+    except (TypeError, ValueError):
+        return None
+    return numero if 0 < numero < 2 ** 63 else None
 
 
 # ---------------------------------------------------------------- clientes
@@ -94,6 +113,7 @@ def clientes() -> list[dict]:
 
 
 def cliente(cliente_id) -> dict | None:
+    cliente_id = _id(cliente_id)
     if not cliente_id:
         return None
     with conexao() as con:
@@ -105,13 +125,13 @@ def cliente_por_uuid(cliente_uuid) -> dict | None:
     if not cliente_uuid:
         return None
     with conexao() as con:
-        r = con.execute("SELECT * FROM clientes WHERE uuid = ?", (cliente_uuid,)).fetchone()
+        r = con.execute("SELECT * FROM clientes WHERE uuid = ?", (_canonico(con, cliente_uuid),)).fetchone()
         return dict(r) if r else None
 
 
-def _limpar_emails(emails: str) -> str:
+def _limpar_emails(emails) -> str:
     """Normaliza 'joao@ivone.com; @ivone.com' -> 'joao@ivone.com, @ivone.com'."""
-    itens = [e.strip().lower() for e in (emails or "").replace(";", ",").replace("\n", ",").split(",")]
+    itens = [e.strip().lower() for e in str(emails or "").replace(";", ",").replace("\n", ",").split(",")]
     vistos = []
     for e in itens:
         if "@" in e and e not in vistos:
@@ -121,7 +141,7 @@ def _limpar_emails(emails: str) -> str:
 
 def cliente_por_email(email: str) -> int | None:
     """Cliente cujo e-mail ou domínio (@empresa.com) cadastrado bate com este e-mail."""
-    email = (email or "").strip().lower()
+    email = str(email or "").strip().lower()
     if "@" not in email:
         return None
     dominio = "@" + email.split("@", 1)[1]
@@ -132,8 +152,10 @@ def cliente_por_email(email: str) -> int | None:
     return None
 
 
-def criar_cliente(nome: str, emails: str = "") -> int:
-    nome = nome.strip()
+def criar_cliente(nome, emails: str = "") -> int | None:
+    nome = str(nome or "").strip()
+    if not nome:
+        return None
     with conexao() as con:
         existente = con.execute("SELECT id, excluido FROM clientes WHERE nome = ?", (nome,)).fetchone()
         if existente:
@@ -145,24 +167,45 @@ def criar_cliente(nome: str, emails: str = "") -> int:
                            (nome, momento, _uuid.uuid4().hex, momento, _limpar_emails(emails))).lastrowid
 
 
-def atualizar_cliente(cliente_id: int, nome: str, emails: str) -> None:
+def _nome_livre(con, nome: str, cliente_id: int) -> None:
+    outro = con.execute("SELECT id FROM clientes WHERE nome = ? AND id != ?", (nome, cliente_id)).fetchone()
+    if outro:
+        raise ClienteDuplicado(f"Já existe um cliente chamado \"{nome}\".")
+
+
+def atualizar_cliente(cliente_id, nome, emails) -> None:
+    cliente_id, nome = _id(cliente_id), str(nome or "").strip()
+    if not cliente_id or not nome:
+        return
     with conexao() as con:
+        _nome_livre(con, nome, cliente_id)
         con.execute("UPDATE clientes SET nome = ?, emails = ?, atualizado_em = ? WHERE id = ?",
-                    (nome.strip(), _limpar_emails(emails), agora(), cliente_id))
+                    (nome, _limpar_emails(emails), agora(), cliente_id))
 
 
-def renomear_cliente(cliente_id: int, nome: str) -> None:
+def renomear_cliente(cliente_id, nome) -> None:
+    cliente_id, nome = _id(cliente_id), str(nome or "").strip()
+    if not cliente_id or not nome:
+        return
     with conexao() as con:
-        con.execute("UPDATE clientes SET nome = ?, atualizado_em = ? WHERE id = ?", (nome.strip(), agora(), cliente_id))
+        _nome_livre(con, nome, cliente_id)
+        con.execute("UPDATE clientes SET nome = ?, atualizado_em = ? WHERE id = ?", (nome, agora(), cliente_id))
 
 
 # ---------------------------------------------------------------- tarefas
 
-def _prazo_valido(prazo: str | None) -> str | None:
+def _prazo_valido(prazo) -> str | None:
     try:
-        return date.fromisoformat((prazo or "").strip()[:10]).isoformat()
+        return date.fromisoformat(str(prazo or "").strip()[:10]).isoformat()
     except ValueError:
         return None  # "A definir" e afins
+
+
+def _cliente_existente(con, cliente_id) -> int | None:
+    cliente_id = _id(cliente_id)
+    if cliente_id and con.execute("SELECT 1 FROM clientes WHERE id = ?", (cliente_id,)).fetchone():
+        return cliente_id
+    return None
 
 
 def criar_tarefa(cliente_id, descricao, responsavel="", minha=True, prazo=None, origem_ata=None, origem_titulo=None) -> int:
@@ -171,8 +214,8 @@ def criar_tarefa(cliente_id, descricao, responsavel="", minha=True, prazo=None, 
         return con.execute(
             "INSERT INTO tarefas (cliente_id, descricao, responsavel, minha, prazo, origem_ata, origem_titulo, "
             "criada_em, uuid, atualizado_em) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (cliente_id or None, descricao.strip(), responsavel.strip(), int(bool(minha)), _prazo_valido(prazo),
-             origem_ata, origem_titulo, momento, _uuid.uuid4().hex, momento),
+            (_cliente_existente(con, cliente_id), str(descricao or "").strip(), str(responsavel or "").strip(),
+             int(bool(minha)), _prazo_valido(prazo), origem_ata, origem_titulo, momento, _uuid.uuid4().hex, momento),
         ).lastrowid
 
 
@@ -189,10 +232,13 @@ def importar_acoes_da_ata(reuniao: dict, ata, cliente_id) -> int:
 def mover_tarefas_da_ata(event_id: str, cliente_id) -> None:
     with conexao() as con:
         con.execute("UPDATE tarefas SET cliente_id = ?, atualizado_em = ? WHERE origem_ata = ?",
-                    (cliente_id or None, agora(), event_id))
+                    (_cliente_existente(con, cliente_id), agora(), event_id))
 
 
-def atualizar_tarefa(tarefa_id: int, **campos) -> None:
+def atualizar_tarefa(tarefa_id, **campos) -> None:
+    tarefa_id = _id(tarefa_id)
+    if not tarefa_id:
+        return
     permitidos = {"descricao", "responsavel", "minha", "prazo", "status", "cliente_id"}
     campos = {k: v for k, v in campos.items() if k in permitidos}
     if "prazo" in campos:
@@ -205,6 +251,8 @@ def atualizar_tarefa(tarefa_id: int, **campos) -> None:
         return
     campos["atualizado_em"] = agora()
     with conexao() as con:
+        if "cliente_id" in campos:
+            campos["cliente_id"] = _cliente_existente(con, campos["cliente_id"])
         con.execute(f"UPDATE tarefas SET {', '.join(f'{k} = ?' for k in campos)} WHERE id = ?",
                     (*campos.values(), tarefa_id))
 
@@ -216,7 +264,10 @@ def excluir_tarefas_da_ata(event_id: str) -> int:
                            "WHERE origem_ata = ? AND status != 'feito' AND excluido = 0", (agora(), event_id)).rowcount
 
 
-def excluir_tarefa(tarefa_id: int) -> None:
+def excluir_tarefa(tarefa_id) -> None:
+    tarefa_id = _id(tarefa_id)
+    if not tarefa_id:
+        return
     with conexao() as con:
         con.execute("UPDATE tarefas SET excluido = 1, atualizado_em = ? WHERE id = ?", (agora(), tarefa_id))
 
@@ -229,44 +280,108 @@ def tarefas(somente_minhas=False, incluir_feitas=False, cliente_id=None) -> list
         sql += " AND t.minha = 1"
     if not incluir_feitas:
         sql += " AND t.status != 'feito'"
-    if cliente_id:
+    if cliente_id is not None and cliente_id != "":
         sql += " AND t.cliente_id = ?"
-        args.append(cliente_id)
+        args.append(_id(cliente_id) or -1)  # id inválido: nenhuma tarefa
     sql += " ORDER BY t.status = 'feito', t.prazo IS NULL, t.prazo, t.id"
-    hoje = date.today().isoformat()
+    hoje = date.today()
     with conexao() as con:
         linhas = [dict(r) for r in con.execute(sql, args)]
     for t in linhas:
-        t["atrasada"] = bool(t["prazo"] and t["prazo"] < hoje and t["status"] != "feito")
-        t["hoje"] = t["prazo"] == hoje
-        t["dias"] = (date.fromisoformat(t["prazo"]) - date.today()).days if t["prazo"] else None
+        prazo = _prazo_valido(t["prazo"]) if t["prazo"] else None  # prazo estranho vindo de fora não derruba a tela
+        t["atrasada"] = bool(prazo and prazo < hoje.isoformat() and t["status"] != "feito")
+        t["hoje"] = prazo == hoje.isoformat()
+        t["dias"] = (date.fromisoformat(prazo) - hoje).days if prazo else None
     return linhas
 
 
 # ---------------------------------------------------------------- anotações por cliente
 
 def notas(cliente_id) -> list[dict]:
+    cliente_id = _id(cliente_id)
+    if not cliente_id:
+        return []
     with conexao() as con:
         return [dict(r) for r in con.execute(
             "SELECT * FROM notas WHERE cliente_id = ? AND excluido = 0 ORDER BY criado_em DESC", (cliente_id,))]
 
 
-def criar_nota(cliente_id, texto: str) -> int | None:
-    texto = (texto or "").strip()
-    if not texto or not cliente(cliente_id):
+def criar_nota(cliente_id, texto) -> int | None:
+    texto = str(texto or "").strip()
+    c = cliente(cliente_id)
+    if not texto or not c:
         return None
     momento = agora()
     with conexao() as con:
         return con.execute("INSERT INTO notas (uuid, cliente_id, texto, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?)",
-                           (_uuid.uuid4().hex, cliente_id, texto, momento, momento)).lastrowid
+                           (_uuid.uuid4().hex, c["id"], texto, momento, momento)).lastrowid
 
 
-def excluir_nota(nota_id: int) -> None:
+def excluir_nota(nota_id) -> None:
+    nota_id = _id(nota_id)
+    if not nota_id:
+        return
     with conexao() as con:
         con.execute("UPDATE notas SET excluido = 1, atualizado_em = ? WHERE id = ?", (agora(), nota_id))
 
 
 # ---------------------------------------------------------------- sincronização
+#
+# Clientes com o mesmo nome (sem diferenciar maiúsculas) são o MESMO cliente, venham de onde vierem
+# (criados nos dois PCs, ou um renomeado para o nome do outro). A união é determinística — os dois
+# PCs chegam ao mesmo resultado em qualquer ordem: fica o MENOR uuid, valem os dados da versão mais
+# recente, tarefas e anotações passam para o registro que fica, e o uuid que saiu vira um apelido
+# (clientes_alias) que também é sincronizado.
+
+def _canonico(con, cliente_uuid):
+    vistos = set()
+    while cliente_uuid and cliente_uuid not in vistos:
+        vistos.add(cliente_uuid)
+        r = con.execute("SELECT para FROM clientes_alias WHERE uuid = ?", (cliente_uuid,)).fetchone()
+        if not r:
+            break
+        cliente_uuid = r["para"]
+    return cliente_uuid
+
+
+def _mais_recente(a: dict, b: dict) -> dict:
+    return a if ((a.get("atualizado_em") or ""), a["uuid"]) >= ((b.get("atualizado_em") or ""), b["uuid"]) else b
+
+
+def _apelidar(con, uuid_antigo: str, canonico: str) -> None:
+    if uuid_antigo != canonico:
+        con.execute("INSERT OR REPLACE INTO clientes_alias (uuid, para) VALUES (?, ?)", (uuid_antigo, canonico))
+
+
+def _unir_registros(con, a: dict, b: dict) -> None:
+    """Une dois registros locais (ids diferentes) do mesmo cliente."""
+    novo = _mais_recente(a, b)
+    canonico = min(a["uuid"], b["uuid"])
+    fica, sai = (a, b) if a["uuid"] == canonico else (b, a)
+    con.execute("UPDATE tarefas SET cliente_id = ? WHERE cliente_id = ?", (fica["id"], sai["id"]))
+    con.execute("UPDATE notas SET cliente_id = ? WHERE cliente_id = ?", (fica["id"], sai["id"]))
+    con.execute("DELETE FROM clientes WHERE id = ?", (sai["id"],))
+    con.execute("UPDATE clientes SET nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
+                (novo["nome"], novo.get("emails") or "", int(novo.get("excluido") or 0), novo["atualizado_em"], fica["id"]))
+    _apelidar(con, sai["uuid"], canonico)
+
+
+def _aplicar(con, local: dict, remoto: dict) -> bool:
+    """Leva para o registro local a versão remota, se for mais recente. Devolve se mudou algo."""
+    if _mais_recente(local, remoto) is local:
+        return False
+    novos = (remoto["nome"], remoto.get("emails") or "", int(remoto.get("excluido") or 0), remoto["atualizado_em"])
+    if novos == (local["nome"], local.get("emails") or "", int(local.get("excluido") or 0), local["atualizado_em"]):
+        return False
+    outro = con.execute("SELECT * FROM clientes WHERE nome = ? AND id != ?", (remoto["nome"], local["id"])).fetchone()
+    if outro:  # renomeado para o nome de outro cliente: são o mesmo
+        _unir_registros(con, {**local, "nome": remoto["nome"], "emails": novos[1], "excluido": novos[2],
+                              "atualizado_em": novos[3]}, dict(outro))
+    else:
+        con.execute("UPDATE clientes SET nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
+                    (*novos, local["id"]))
+    return True
+
 
 def exportar() -> dict:
     """Tudo (inclusive excluídos), com o cliente referenciado pelo uuid — igual em todos os PCs."""
@@ -279,65 +394,113 @@ def exportar() -> dict:
         nts = [dict(r) for r in con.execute(
             "SELECT n.uuid, c.uuid AS cliente_uuid, n.texto, n.criado_em, n.atualizado_em, n.excluido "
             "FROM notas n LEFT JOIN clientes c ON c.id = n.cliente_id ORDER BY n.uuid")]
-    return {"clientes": cli, "tarefas": tar, "notas": nts}
+        apelidos = [dict(r) for r in con.execute("SELECT uuid, para FROM clientes_alias ORDER BY uuid")]
+    return {"clientes": cli, "tarefas": tar, "notas": nts, "apelidos": apelidos}
+
+
+def _tarefa_limpa(t: dict) -> list:
+    """Valores de uma tarefa vinda de outro PC, normalizados como o próprio sistema grava."""
+    v = {c: t.get(c) for c in CAMPOS_TAREFA}
+    v["descricao"] = str(v["descricao"] or "").strip() or "(sem descrição)"
+    v["responsavel"] = str(v["responsavel"] or "")
+    v["minha"] = int(bool(v["minha"]))
+    v["prazo"] = _prazo_valido(v["prazo"]) if v["prazo"] else None
+    v["status"] = v["status"] if v["status"] in STATUS else "a_fazer"
+    v["excluido"] = int(bool(v["excluido"]))
+    v["criada_em"] = v["criada_em"] or v["atualizado_em"] or agora()
+    v["atualizado_em"] = v["atualizado_em"] or ""
+    return [v[c] for c in CAMPOS_TAREFA]
 
 
 def mesclar(remoto: dict) -> int:
     """Junta os dados vindos de outro PC: em cada registro vale a alteração mais recente.
     Devolve quantos registros locais mudaram."""
+    if not isinstance(remoto, dict):
+        return 0
     mudou = 0
     with conexao() as con:
-        for c in remoto.get("clientes", []):
-            local = con.execute("SELECT * FROM clientes WHERE uuid = ?", (c["uuid"],)).fetchone()
-            if not local:
-                # Mesmo cliente criado separadamente nos dois PCs: une pelo nome e fica com um uuid só
-                local = con.execute("SELECT * FROM clientes WHERE nome = ?", (c["nome"],)).fetchone()
-                if local:
-                    if c["uuid"] < local["uuid"]:
-                        con.execute("UPDATE clientes SET uuid = ? WHERE id = ?", (c["uuid"], local["id"]))
-                        mudou += 1
-                    continue
-                con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
-                            "VALUES (?, ?, ?, ?, ?, ?)", (c["uuid"], c["nome"], c.get("emails", ""), c["criado_em"],
-                                                          c["atualizado_em"], c["excluido"]))
-                mudou += 1
-            elif (c["atualizado_em"] or "") > (local["atualizado_em"] or ""):
-                con.execute("UPDATE clientes SET nome = ?, emails = ?, atualizado_em = ?, excluido = ? WHERE id = ?",
-                            (c["nome"], c.get("emails", ""), c["atualizado_em"], c["excluido"], local["id"]))
-                mudou += 1
+        # 1) apelidos (uniões feitas no outro PC)
+        for ap in remoto.get("apelidos", []) or []:
+            if not ap.get("uuid") or not ap.get("para") or ap["uuid"] == ap["para"]:
+                continue
+            if con.execute("SELECT 1 FROM clientes_alias WHERE uuid = ? AND para = ?", (ap["uuid"], ap["para"])).fetchone():
+                continue
+            _apelidar(con, ap["uuid"], ap["para"])
+            mudou += 1
+            antigo = con.execute("SELECT * FROM clientes WHERE uuid = ?", (ap["uuid"],)).fetchone()
+            if antigo:
+                destino = con.execute("SELECT * FROM clientes WHERE uuid = ?", (_canonico(con, ap["para"]),)).fetchone()
+                if destino:
+                    _unir_registros(con, dict(antigo), dict(destino))
+                else:
+                    con.execute("UPDATE clientes SET uuid = ? WHERE id = ?", (_canonico(con, ap["para"]), antigo["id"]))
 
-        ids = {r["uuid"]: r["id"] for r in con.execute("SELECT id, uuid FROM clientes")}
-        nomes_remotos = {c["uuid"]: c["nome"] for c in remoto.get("clientes", [])}
-        ids_por_nome = {r["nome"].lower(): r["id"] for r in con.execute("SELECT id, nome FROM clientes")}
+        # 2) clientes
+        for c in sorted(remoto.get("clientes", []) or [], key=lambda x: str(x.get("uuid"))):
+            if not c.get("uuid"):
+                continue
+            c = {**c, "uuid": _canonico(con, c["uuid"]), "nome": str(c.get("nome") or "").strip() or "(sem nome)",
+                 "emails": _limpar_emails(c.get("emails")), "excluido": int(bool(c.get("excluido"))),
+                 "atualizado_em": c.get("atualizado_em") or "", "criado_em": c.get("criado_em") or agora()}
+            local = con.execute("SELECT * FROM clientes WHERE uuid = ?", (c["uuid"],)).fetchone()
+            if local:
+                mudou += _aplicar(con, dict(local), c)
+                continue
+            mesmo_nome = con.execute("SELECT * FROM clientes WHERE nome = ?", (c["nome"],)).fetchone()
+            if not mesmo_nome:
+                con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (c["uuid"], c["nome"], c["emails"], c["criado_em"], c["atualizado_em"], c["excluido"]))
+                mudou += 1
+                continue
+            # mesmo cliente com outro uuid: fica o menor, valem os dados mais recentes
+            local = dict(mesmo_nome)
+            canonico = min(local["uuid"], c["uuid"])
+            novo = _mais_recente(local, c)
+            con.execute("UPDATE clientes SET uuid = ?, nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
+                        (canonico, novo["nome"], novo.get("emails") or "", int(novo.get("excluido") or 0),
+                         novo["atualizado_em"], local["id"]))
+            _apelidar(con, c["uuid"] if canonico == local["uuid"] else local["uuid"], canonico)
+            mudou += 1
 
         def id_local(cliente_uuid):
             if not cliente_uuid:
                 return None
-            return ids.get(cliente_uuid) or ids_por_nome.get((nomes_remotos.get(cliente_uuid) or "").lower())
+            r = con.execute("SELECT id FROM clientes WHERE uuid = ?", (_canonico(con, cliente_uuid),)).fetchone()
+            return r["id"] if r else None
 
-        for t in remoto.get("tarefas", []):
+        # 3) tarefas
+        for t in remoto.get("tarefas", []) or []:
+            if not t.get("uuid"):
+                continue
             local = con.execute("SELECT atualizado_em FROM tarefas WHERE uuid = ?", (t["uuid"],)).fetchone()
-            valores = [t[c] for c in CAMPOS_TAREFA]
+            valores = _tarefa_limpa(t)
             if not local:
                 con.execute(f"INSERT INTO tarefas (uuid, cliente_id, {', '.join(CAMPOS_TAREFA)}) "
                             f"VALUES (?, ?, {', '.join('?' * len(CAMPOS_TAREFA))})",
-                            (t["uuid"], id_local(t["cliente_uuid"]), *valores))
+                            (t["uuid"], id_local(t.get("cliente_uuid")), *valores))
                 mudou += 1
-            elif (t["atualizado_em"] or "") > (local["atualizado_em"] or ""):
+            elif (t.get("atualizado_em") or "") > (local["atualizado_em"] or ""):
                 con.execute(f"UPDATE tarefas SET cliente_id = ?, {', '.join(c + ' = ?' for c in CAMPOS_TAREFA)} "
-                            "WHERE uuid = ?", (id_local(t["cliente_uuid"]), *valores, t["uuid"]))
+                            "WHERE uuid = ?", (id_local(t.get("cliente_uuid")), *valores, t["uuid"]))
                 mudou += 1
 
-        for n in remoto.get("notas", []):
+        # 4) anotações
+        for n in remoto.get("notas", []) or []:
+            if not n.get("uuid"):
+                continue
             local = con.execute("SELECT atualizado_em FROM notas WHERE uuid = ?", (n["uuid"],)).fetchone()
+            texto = str(n.get("texto") or "")
             if not local:
                 con.execute("INSERT INTO notas (uuid, cliente_id, texto, criado_em, atualizado_em, excluido) "
-                            "VALUES (?, ?, ?, ?, ?, ?)", (n["uuid"], id_local(n["cliente_uuid"]), n["texto"],
-                                                           n["criado_em"], n["atualizado_em"], n["excluido"]))
+                            "VALUES (?, ?, ?, ?, ?, ?)", (n["uuid"], id_local(n.get("cliente_uuid")), texto,
+                                                           n.get("criado_em") or agora(), n.get("atualizado_em") or "",
+                                                           int(bool(n.get("excluido")))))
                 mudou += 1
-            elif (n["atualizado_em"] or "") > (local["atualizado_em"] or ""):
+            elif (n.get("atualizado_em") or "") > (local["atualizado_em"] or ""):
                 con.execute("UPDATE notas SET cliente_id = ?, texto = ?, atualizado_em = ?, excluido = ? WHERE uuid = ?",
-                            (id_local(n["cliente_uuid"]), n["texto"], n["atualizado_em"], n["excluido"], n["uuid"]))
+                            (id_local(n.get("cliente_uuid")), texto, n["atualizado_em"], int(bool(n.get("excluido"))),
+                             n["uuid"]))
                 mudou += 1
     return mudou
 

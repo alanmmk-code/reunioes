@@ -30,9 +30,13 @@ ATAS_DIR.mkdir(exist_ok=True)
 GRAVACOES_DIR = DADOS_DIR / "gravacoes"
 GRAVACOES_DIR.mkdir(exist_ok=True)
 WHISPER_MODELO = os.getenv("WHISPER_MODELO", "small")  # tiny, base, small, medium, large-v3-turbo
-WHISPER_MODELO_AO_VIVO = os.getenv("WHISPER_MODELO_AO_VIVO", "base")  # seu microfone, ao vivo (rápido)
+WHISPER_MODELO_AO_VIVO = os.getenv("WHISPER_MODELO_AO_VIVO", "small")  # seu microfone, ao vivo
 WHISPER_MODELO_AO_VIVO_OUTROS = os.getenv("WHISPER_MODELO_AO_VIVO_OUTROS", "small")  # os outros, ao vivo
 SEU_NOME = os.getenv("SEU_NOME", "Eu")
+# Microfone das gravações: parte do nome (ex.: "Realtek", "Galaxy Buds"); vazio = o padrão do Windows
+MICROFONE = os.getenv("MICROFONE", "")
+# Grava também este microfone numa trilha à parte, só para comparar a qualidade (não entra na ata)
+MICROFONE_COMPARAR = os.getenv("MICROFONE_COMPARAR", "")
 # Gravar sozinho quando uma chamada do Meet for detectada no navegador
 GRAVACAO_AUTOMATICA = os.getenv("GRAVACAO_AUTOMATICA", "sim").lower() in ("sim", "s", "true", "1")
 # Transcrever durante a reunião e sugerir o que responder (janelinha de sugestões)
@@ -53,6 +57,9 @@ AVISO_DIARIO_HORA = os.getenv("AVISO_DIARIO_HORA", "08:30")
 BRIEFING_MINUTOS_ANTES = int(os.getenv("BRIEFING_MINUTOS_ANTES", "10"))
 AVISO_SEMANAL_HORA = os.getenv("AVISO_SEMANAL_HORA", "16:00")  # sexta-feira
 LEMBRETES = os.getenv("LEMBRETES", "sim").lower() in ("sim", "s", "true", "1")
+
+# Conta do Outlook usada por padrão para e-mails e convites (dá para trocar em cada envio)
+EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE", "")
 
 # Sincronização dos dados entre PCs pelo Google Drive
 SINCRONIZAR = os.getenv("SINCRONIZAR", "sim").lower() in ("sim", "s", "true", "1")

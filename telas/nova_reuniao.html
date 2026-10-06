@@ -1,5 +1,5 @@
 <h1>Nova reunião</h1>
-<p class="mut">Cria o evento no Google Agenda com link do Meet e envia o convite para os convidados.</p>
+<p class="mut">Cria o evento no Google Agenda com link do Meet e envia o convite pelo Outlook.</p>
 <form method="get" class="row" style="justify-content:flex-start;margin-bottom:10px">
 <span class="mut">Cliente:</span>
 <select name="cliente" onchange="this.form.submit()" style="width:auto"><option value="">— sem cliente —</option>
@@ -17,6 +17,9 @@
 <label class="mut">Convidados (e-mails separados por vírgula)
 <input name="convidados" value="{{ convidados }}" placeholder="pessoa@cliente.com"></label>
 <label class="mut">Pauta <textarea name="pauta" rows="8">{{ pauta }}</textarea></label>
+{{ seletor_remetente()|safe }}
+<p class="mut" style="margin:0;font-size:12.5px">A reunião é criada no seu Google Agenda com o link do Meet, e o convite
+(com aceitar/recusar) sai pelo Outlook, da conta escolhida acima.</p>
 <div class="row" style="justify-content:flex-start;gap:8px"><button>Criar reunião e enviar convites</button>
 <a class="btn sec" href="{{ url_for('ficha_cliente', cliente_id=c.id) if c else url_for('inicio') }}">Cancelar</a></div>
 </form>

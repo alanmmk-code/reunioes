@@ -28,6 +28,7 @@ import atas
 import clientes
 import config
 import db
+import envio
 import extras
 import google_services as g
 import gravador
@@ -37,6 +38,20 @@ import sincronia
 
 app = Flask(__name__)
 app.secret_key = "reunioes-local"
+
+
+def seletor_remetente(nome: str = "remetente") -> str:
+    """<select> com as contas do Outlook, para escolher de qual e-mail enviar."""
+    contas, padrao = envio.contas(), envio.remetente_padrao()
+    if not contas:  # ainda carregando do Outlook (ou Outlook fechado): deixa digitar
+        return (f'<label class="mut remetente">Enviar de <input name="{nome}" value="{escape(padrao)}" '
+                'placeholder="seu@email.com" style="width:260px"> <span>(conta do Outlook deste PC)</span></label>')
+    opcoes = "".join(f'<option value="{escape(c)}" {"selected" if c.lower() == padrao.lower() else ""}>{escape(c)}</option>'
+                     for c in contas)
+    return f'<label class="mut remetente">Enviar de <select name="{nome}" style="width:auto">{opcoes}</select></label>'
+
+
+app.jinja_env.globals.update(seletor_remetente=seletor_remetente)
 
 GRAVADOR = gravador.Gravador()
 
@@ -108,14 +123,14 @@ def sugerir_cliente(reuniao: dict) -> int | None:
     return max(votos, key=votos.get) if votos else None
 
 
-def enviar_ata(event_id: str, destinatarios: list[str]) -> None:
+def enviar_ata(event_id: str, destinatarios: list[str], remetente: str | None = None) -> None:
     reg = atas.carregar(event_id)
     ata = analisador.Ata.model_validate(reg["ata"])
     html = atas.para_html(ata, reg["reuniao"])
     html = html.replace(
         "</h1>", f'</h1><p><a href="{reg["doc_link"]}">Abrir a ata no Google Docs</a></p>', 1
     )
-    g.enviar_email(destinatarios, f"Ata: {ata.titulo}", html)
+    envio.enviar_email(remetente or envio.remetente_padrao(), destinatarios, f"Ata: {ata.titulo}", html)
     reg["email_enviado_para"] = sorted(set(reg["email_enviado_para"]) | set(destinatarios))
     atas.salvar(event_id, reg)
 
@@ -351,19 +366,36 @@ def _audios_da_pendente(p: dict) -> dict:
     return {n: c for n, c in caminhos.items() if c.exists()}
 
 
-def carregar_pendente(pid: str) -> dict | None:
-    arq = config.GRAVACOES_DIR / f"{pid}.json"
-    if not arq.exists() or "/" in pid or "\\" in pid:
+def _ler_pendente(arq) -> dict | None:
+    """Lê uma gravação pendente; ignora arquivo corrompido ou fora do formato."""
+    try:
+        dados = json.loads(arq.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
         return None
-    dados = json.loads(arq.read_text(encoding="utf-8"))
-    return None if dados.get("resolvida") else dados
+    if not isinstance(dados, dict) or not isinstance(dados.get("reuniao"), dict) or not isinstance(dados.get("arquivos"), dict):
+        return None
+    dados["reuniao"].setdefault("titulo", "Reunião")
+    dados.setdefault("minutos", 0)
+    dados.setdefault("encerrada_em", "")
+    dados.setdefault("transcricao_ao_vivo", "")
+    return dados
+
+
+def carregar_pendente(pid: str) -> dict | None:
+    if not pid or "/" in pid or "\\" in pid or ".." in pid:
+        return None
+    arq = config.GRAVACOES_DIR / f"{pid}.json"
+    if not arq.exists():
+        return None
+    dados = _ler_pendente(arq)
+    return None if not dados or dados.get("resolvida") else dados
 
 
 def listar_pendentes() -> list[dict]:
     lista = []
     for arq in sorted(config.GRAVACOES_DIR.glob("*.json"), reverse=True):
-        dados = json.loads(arq.read_text(encoding="utf-8"))
-        if not dados.get("resolvida"):
+        dados = _ler_pendente(arq)
+        if dados and not dados.get("resolvida"):
             lista.append({"pid": arq.stem, **dados})
     return lista
 
@@ -483,7 +515,7 @@ TELA_PAINEL = config.BASE_DIR / "telas" / "painel.html"
 @app.route("/")
 def inicio():
     """Tela única: agenda da semana, tarefas, reuniões recentes e alertas."""
-    semana = request.args.get("semana", 0, type=int)
+    semana = max(-520, min(520, request.args.get("semana", 0, type=int)))  # até 10 anos para cada lado
     agora = datetime.now().astimezone()
     hoje = agora.date()
     segunda = hoje - timedelta(days=hoje.weekday()) + timedelta(weeks=semana)
@@ -638,9 +670,10 @@ def api_aovivo():
 
 @app.post("/api/cliente")
 def api_cliente():
-    dados = request.get_json(silent=True) or {}
+    dados = request.get_json(silent=True)
+    dados = dados if isinstance(dados, dict) else {}
     cliente_id = dados.get("cliente_id")
-    if dados.get("novo"):
+    if isinstance(dados.get("novo"), str) and dados["novo"].strip():
         cliente_id = db.criar_cliente(dados["novo"])
     definir_cliente_da_gravacao(cliente_id)
     return {"ok": True}
@@ -815,6 +848,7 @@ def ver_ata(event_id):
 <form class="card" method="post" action="{{ url_for('email', event_id=event_id) }}" data-espera="Enviando…">
 {% for p in r.participantes %}<label><input type="checkbox" style="width:auto" name="emails" value="{{ p.email }}" checked> {{ p.nome or p.email }} &lt;{{ p.email }}&gt;</label><br>{% endfor %}
 <p><input name="extras" placeholder="Outros e-mails, separados por vírgula"></p>
+<p>{{ seletor_remetente()|safe }}</p>
 {% if reg.email_enviado_para %}<p class="ok">Já enviada para: {{ reg.email_enviado_para|join(', ') }}</p>{% endif %}
 <button>Enviar</button></form>
 
@@ -825,6 +859,7 @@ def ver_ata(event_id):
 <div class="row"><input type="datetime-local" name="inicio" value="{{ prox.data_hora }}" style="flex:2" required>
 <input type="number" name="duracao" value="{{ prox.duracao_min or 30 }}" min="15" step="15" style="flex:1"> min</div>
 <p class="mut">Convidados: {{ r.participantes|map(attribute='email')|join(', ') or 'nenhum' }}</p>
+<p>{{ seletor_remetente()|safe }}</p>
 <button>Criar evento com Meet</button></form>""",
         a=a, r=r, reg=reg, prox=prox, event_id=event_id, seletor_cliente=seletor_cliente,
     )
@@ -838,8 +873,9 @@ def email(event_id):
         flash("Escolha pelo menos um destinatário.")
     else:
         try:
-            enviar_ata(event_id, emails)
-            flash(f"Ata enviada para {', '.join(emails)}.")
+            remetente = request.form.get("remetente") or envio.remetente_padrao()
+            enviar_ata(event_id, emails, remetente)
+            flash(f"Ata enviada de {remetente} para {', '.join(emails)}.")
         except Exception as e:
             flash(f"Erro ao enviar: {e}")
     return redirect(url_for("ver_ata", event_id=event_id))
@@ -852,12 +888,19 @@ def followup(event_id):
         inicio = datetime.fromisoformat(request.form["inicio"])
         pauta = reg["ata"]["proxima_reuniao"]["pauta"] or [x["tarefa"] for x in reg["ata"]["acoes"]]
         descricao = "Pauta:\n" + "\n".join(f"- {p}" for p in pauta) + f"\n\nAta anterior: {reg['doc_link']}"
-        reg["followup"] = g.agendar_followup(
-            request.form["titulo"], inicio, int(request.form.get("duracao", 30)),
-            [p["email"] for p in reg["reuniao"]["participantes"]], descricao,
-        )
+        convidados = [p["email"] for p in reg["reuniao"]["participantes"]]
+        duracao = int(request.form.get("duracao", 30))
+        reg["followup"] = g.agendar_followup(request.form["titulo"], inicio, duracao, convidados, descricao,
+                                             enviar_convites=False)
         atas.salvar(event_id, reg)
-        flash("Reunião agendada e convites enviados.")
+        if convidados:
+            remetente = request.form.get("remetente") or envio.remetente_padrao()
+            entry = envio.enviar_convite(remetente, convidados, request.form["titulo"], inicio, duracao,
+                                         reg["followup"].get("link_meet"), descricao)
+            envio.registrar_convite(reg["followup"]["id"], remetente, entry)
+            flash(f"Reunião agendada e convite enviado de {remetente}.")
+        else:
+            flash("Reunião agendada (sem convidados).")
     except Exception as e:
         flash(f"Erro ao agendar: {e}")
     return redirect(url_for("ver_ata", event_id=event_id))
@@ -980,7 +1023,8 @@ def resumo(event_id):
 <div class="row"><div><h1>{{ r.titulo }}</h1>
 <p class="mut">{% if inicio %}{{ inicio.strftime('%d/%m às %H:%M') }}{% if faltam is not none and faltam >= 0 %} · começa em {{ faltam }} min{% endif %}{% endif %}
 {% if r.participantes %} · {{ r.participantes|map(attribute='email')|join(', ') }}{% endif %}</p></div>
-<a class="btn" href="{{ r.link }}" target="_blank">Entrar no Meet</a></div>
+<div style="display:flex;gap:8px">{% if r.organizador and not r.ja_terminou %}<a class="btn sec" href="{{ url_for('remarcar_reuniao', event_id=r.id, voltar=request.full_path) }}">Remarcar</a>{% endif %}
+<a class="btn" href="{{ r.link }}" target="_blank">Entrar no Meet</a></div></div>
 
 <form method="get" class="row" style="justify-content:flex-start;margin:6px 0 4px">
 <span class="mut">Cliente:</span><select name="cliente" onchange="this.form.submit()" style="width:auto">
@@ -1031,7 +1075,8 @@ def cliente_do_formulario():
     if valor == "novo":
         nome = request.form.get("cliente_novo", "").strip()
         return db.criar_cliente(nome) if nome else None
-    return int(valor) if valor.isdigit() else None
+    c = db.cliente(valor)  # valida: número normal e cliente existente (senão, sem cliente)
+    return c["id"] if c else None
 
 
 @app.post("/ata/<event_id>/cliente")
@@ -1243,15 +1288,21 @@ def cliente_novo():
 @app.post("/clientes/<int:cliente_id>/editar")
 def cliente_editar(cliente_id):
     if request.form.get("nome", "").strip():
-        db.atualizar_cliente(cliente_id, request.form["nome"], request.form.get("emails", ""))
-        flash("Cliente atualizado.")
+        try:
+            db.atualizar_cliente(cliente_id, request.form["nome"], request.form.get("emails", ""))
+            flash("Cliente atualizado.")
+        except db.ClienteDuplicado as e:
+            flash(str(e))
     return redirect(url_for("ficha_cliente", cliente_id=cliente_id))
 
 
 @app.post("/clientes/<int:cliente_id>")
 def cliente_renomear(cliente_id):
     if request.form.get("nome", "").strip():
-        db.renomear_cliente(cliente_id, request.form["nome"])
+        try:
+            db.renomear_cliente(cliente_id, request.form["nome"])
+        except db.ClienteDuplicado as e:
+            flash(str(e))
     return redirect(request.referrer or url_for("tarefas"))
 
 
@@ -1280,6 +1331,7 @@ if __name__ == "__main__":
             print("[monitor] vigiando chamadas do Meet")
         vigiar_janela()
         sincronia.iniciar_automatico()
+        envio.contas()  # já busca as contas do Outlook em segundo plano
         # deixa pronto o status do sistema (verifica Google e Claude em segundo plano)
         threading.Thread(target=lambda: clientes.status_sistema(sincronia.ESTADO, config.GRAVACAO_AUTOMATICA),
                          daemon=True).start()

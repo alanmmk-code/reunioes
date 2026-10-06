@@ -132,15 +132,13 @@ def texto_cobranca(cliente_id) -> dict:
             "assunto": f"Acompanhamento — {c['nome'] if c else 'pendências'}", "corpo": corpo, "itens": dele}
 
 
-def enviar_cobranca(para: str, assunto: str, corpo: str) -> list[str]:
+def enviar_cobranca(para: str, assunto: str, corpo: str, remetente: str | None = None) -> list[str]:
     from html import escape
 
-    destinatarios = [e.strip() for e in para.replace(";", ",").split(",") if "@" in e]
-    if not destinatarios:
-        raise ValueError("Informe pelo menos um e-mail válido.")
+    import envio
+
     html = "<div style='font-family:Arial,sans-serif;font-size:11pt'>" + escape(corpo).replace("\n", "<br>") + "</div>"
-    g.enviar_email(destinatarios, assunto, html)
-    return destinatarios
+    return envio.enviar_email(remetente or envio.remetente_padrao(), para, assunto, html)
 
 
 # ---------------------------------------------------------------- perguntas às atas

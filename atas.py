@@ -25,8 +25,15 @@ def salvar_bruto(event_id: str, registro: dict) -> None:
 
 
 def carregar(event_id: str) -> dict | None:
+    """Ata salva, ou None se não existir ou estiver corrompida (ex.: download interrompido)."""
     arq = _arquivo(event_id)
-    return json.loads(arq.read_text(encoding="utf-8")) if arq.exists() else None
+    if not arq.exists():
+        return None
+    try:
+        dados = json.loads(arq.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    return dados if isinstance(dados, dict) and isinstance(dados.get("reuniao", {}), dict) else None
 
 
 def existentes() -> set[str]:

@@ -10,6 +10,7 @@ from flask import flash, redirect, request, url_for
 import clientes
 import config
 import db
+import envio
 import google_services as g
 
 TELAS = config.BASE_DIR / "telas"
@@ -70,11 +71,12 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             return redirect(url_for("lista_clientes"))
         if request.method == "POST":
             try:
+                remetente = request.form.get("remetente") or envio.remetente_padrao()
                 enviados = clientes.enviar_cobranca(request.form.get("para", ""), request.form.get("assunto", ""),
-                                                    request.form.get("corpo", ""))
-                db.criar_nota(cliente_id, f"Cobrança enviada por e-mail para {', '.join(enviados)}:\n\n"
+                                                    request.form.get("corpo", ""), remetente)
+                db.criar_nota(cliente_id, f"Cobrança enviada de {remetente} para {', '.join(enviados)}:\n\n"
                                           + request.form.get("corpo", ""))
-                flash(f"E-mail enviado para {', '.join(enviados)}. Ficou registrado nas anotações do cliente.")
+                flash(f"E-mail enviado de {remetente} para {', '.join(enviados)}. Ficou registrado nas anotações do cliente.")
                 return redirect(url_for("ficha_cliente", cliente_id=cliente_id))
             except Exception as e:
                 flash(f"Não consegui enviar: {e}")
@@ -89,7 +91,8 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
     @app.route("/perguntar", methods=["GET", "POST"])
     def perguntar():
         pergunta = (request.values.get("pergunta") or "").strip()
-        cliente_id = request.values.get("cliente_id", type=int)
+        c_valido = db.cliente(request.values.get("cliente_id"))
+        cliente_id = c_valido["id"] if c_valido else None
         resposta = None
         if request.method == "POST" and pergunta:
             try:
@@ -107,17 +110,28 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             try:
                 inicio = datetime.fromisoformat(f"{request.form['data']}T{request.form['hora']}")
                 convidados = [e.strip() for e in request.form.get("convidados", "").replace(";", ",").split(",") if "@" in e]
-                criado = g.agendar_followup(request.form["titulo"].strip() or "Reunião", inicio,
-                                            int(request.form.get("duracao", 30)), convidados,
-                                            request.form.get("pauta", "").strip())
-                flash("Reunião criada no Google Agenda" + (f" e convites enviados para {', '.join(convidados)}"
-                                                         if convidados else "") + ".")
+                titulo, duracao = request.form["titulo"].strip() or "Reunião", int(request.form.get("duracao", 30))
+                pauta = request.form.get("pauta", "").strip()
+                # evento (com Meet) no Google Agenda sem e-mail do Google; o convite sai pelo Outlook
+                criado = g.agendar_followup(titulo, inicio, duracao, convidados, pauta, enviar_convites=False)
+                remetente = request.form.get("remetente") or envio.remetente_padrao()
+                if convidados:
+                    try:
+                        entry = envio.enviar_convite(remetente, convidados, titulo, inicio, duracao,
+                                                     criado.get("link_meet"), pauta)
+                        envio.registrar_convite(criado["id"], remetente, entry)
+                    except Exception as erro:
+                        flash(f"A reunião foi criada no Google Agenda, mas o convite pelo Outlook falhou: {erro}")
+                        raise
+                flash("Reunião criada no Google Agenda" + (f" e convite enviado de {remetente} para {', '.join(convidados)}"
+                                                         if convidados else "")
+                      + ". Para mudar data ou horário, use Remarcar na agenda do Painel.")
                 cid = request.form.get("cliente_id", type=int)
                 return redirect(url_for("ficha_cliente", cliente_id=cid) if cid else url_for("inicio"))
             except Exception as e:
                 flash(f"Não consegui criar a reunião: {e}")
-        cliente_id = request.values.get("cliente", type=int)
-        c = db.cliente(cliente_id)
+        c = db.cliente(request.values.get("cliente"))
+        cliente_id = c["id"] if c else None
         pauta, convidados = "", ""
         if c:
             pendentes = db.tarefas(cliente_id=cliente_id)
@@ -128,6 +142,48 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
         amanha = date.today() + timedelta(days=1)
         return pagina(_tela("nova_reuniao.html"), c=c, clientes=db.clientes(), pauta=pauta, convidados=convidados,
                       data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "")
+
+    # ------------------------------------------------------------ remarcar
+
+    @app.route("/reuniao/<event_id>/remarcar", methods=["GET", "POST"])
+    def remarcar_reuniao(event_id):
+        e = g.obter_evento(event_id)
+        voltar = request.values.get("voltar") or request.referrer or url_for("inicio")
+        if not voltar.startswith("/") and "localhost" not in voltar and "127.0.0.1" not in voltar:
+            voltar = url_for("inicio")
+        if not e:
+            flash("Reunião não encontrada no Google Agenda.")
+            return redirect(voltar)
+        if not e["organizador"]:
+            flash("Só quem organizou a reunião pode mudar a data e o horário. Peça ao organizador.")
+            return redirect(voltar)
+        if e["dia_inteiro"]:
+            flash("Este é um evento de dia inteiro; altere pelo Google Agenda.")
+            return redirect(voltar)
+        ini = datetime.fromisoformat(e["inicio"]).astimezone()
+        duracao_atual = int((datetime.fromisoformat(e["fim"]) - datetime.fromisoformat(e["inicio"])).total_seconds() // 60)
+        if request.method == "POST":
+            try:
+                novo_inicio = datetime.fromisoformat(f"{request.form['data']}T{request.form['hora']}")
+                duracao = max(5, min(int(request.form.get("duracao", duracao_atual)), 24 * 60))
+                titulo = request.form.get("titulo", "").strip() or None
+                novo_titulo = titulo if titulo != e["titulo"] else None
+                convite = envio.convite_do_evento(event_id)
+                if convite:  # convite saiu pelo Outlook: Google sem e-mail, atualização pelo Outlook
+                    g.remarcar_evento(event_id, novo_inicio, duracao, novo_titulo, avisar=False)
+                    envio.atualizar_convite(convite["entry_id"], novo_inicio, duracao, novo_titulo)
+                else:
+                    g.remarcar_evento(event_id, novo_inicio, duracao, novo_titulo)
+                flash(f"Reunião remarcada para {novo_inicio:%d/%m às %H:%M}"
+                      + (" e convidados avisados." if e["participantes"] else "."))
+                return redirect(voltar)
+            except (ValueError, KeyError):
+                flash("Data ou hora inválida.")
+            except Exception as erro:
+                flash(f"Não consegui remarcar: {erro}")
+        duracoes = sorted({15, 30, 45, 60, 90, 120, duracao_atual})
+        return pagina(_tela("remarcar.html"), e=e, voltar=voltar, data=ini.date().isoformat(), hora=ini.strftime("%H:%M"),
+                      duracao=duracao_atual, duracoes=duracoes, atual=f"{ini:%d/%m/%Y às %H:%M} ({duracao_atual} min)")
 
     # ------------------------------------------------------------ semana e mês
 

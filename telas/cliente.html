@@ -32,7 +32,8 @@
 
 <section class="box"><div class="box-h"><h2>Próximas reuniões</h2></div>
 {% for e in proximas %}<div class="li"><span>{{ e.titulo }} <span class="mut">· {{ e.inicio[8:10] }}/{{ e.inicio[5:7] }} {{ e.inicio[11:16] }}</span></span>
-<a class="btn sec" href="{{ url_for('resumo', event_id=e.id) }}">Resumo</a></div>
+<span style="display:flex;gap:6px"><a class="btn sec" href="{{ url_for('resumo', event_id=e.id) }}">Resumo</a>
+{% if e.organizador %}<a class="btn sec" href="{{ url_for('remarcar_reuniao', event_id=e.id, voltar=request.full_path) }}">Remarcar</a>{% endif %}</span></div>
 {% else %}<div class="li mut">Nenhuma marcada nos próximos 30 dias. <a href="{{ url_for('nova_reuniao', cliente=c.id) }}">Marcar</a></div>{% endfor %}</section>
 
 <section class="box"><div class="box-h"><h2>Contatos</h2><span class="mut">das reuniões</span></div>

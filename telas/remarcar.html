@@ -1,0 +1,15 @@
+<h1>Remarcar reunião</h1>
+<p class="mut">Muda a data e o horário no Google Agenda. Os convidados recebem a atualização por e-mail.</p>
+<form method="post" class="card" data-espera="Salvando…" style="display:grid;gap:10px">
+<input type="hidden" name="voltar" value="{{ voltar }}">
+<label class="mut">Título <input name="titulo" value="{{ e.titulo }}" required></label>
+<div class="nr-linha">
+<label class="mut">Data <input type="date" name="data" value="{{ data }}" required></label>
+<label class="mut">Hora <input type="time" name="hora" value="{{ hora }}" required></label>
+<label class="mut">Duração <select name="duracao">{% for m in duracoes %}<option value="{{ m }}" {{ 'selected' if m == duracao }}>{{ m }} min</option>{% endfor %}</select></label>
+</div>
+<p class="mut" style="margin:0">Hoje: <b>{{ atual }}</b>{% if e.participantes %} · convidados: {{ e.participantes|join(', ') }}{% endif %}</p>
+<div class="row" style="justify-content:flex-start;gap:8px"><button>Salvar e avisar convidados</button>
+<a class="btn sec" href="{{ voltar }}">Cancelar</a>
+{% if e.link_agenda %}<a class="mut" href="{{ e.link_agenda }}" target="_blank" style="margin-left:auto">abrir no Google Agenda ↗</a>{% endif %}</div>
+</form>

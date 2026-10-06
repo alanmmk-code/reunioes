@@ -10,3 +10,4 @@ faster-whisper
 numpy
 pycaw
 psutil
+pywin32

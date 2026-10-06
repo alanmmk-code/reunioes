@@ -33,6 +33,18 @@ def carregar_modelo(nome: str | None = None):
     return _modelos[nome]
 
 
+def _microfone(parte_do_nome: str):
+    """Microfone cujo nome contém o texto (ex.: "Realtek"), ou None."""
+    import soundcard as sc
+
+    if not parte_do_nome:
+        return None
+    for m in sc.all_microphones():
+        if parte_do_nome.lower() in m.name.lower():
+            return m
+    return None
+
+
 class _Trilha(threading.Thread):
     def __init__(self, dispositivo, caminho, parar: threading.Event):
         super().__init__(daemon=True)
@@ -84,10 +96,15 @@ class Gravador:
             raise RuntimeError("Já existe uma gravação em andamento.")
         base = config.GRAVACOES_DIR / f"{datetime.now():%Y%m%d-%H%M%S}-{reuniao['id'][:20]}"
         alto_falante = sc.default_speaker()
+        microfone = _microfone(config.MICROFONE) or sc.default_microphone()
         fontes = {
-            "voce": sc.default_microphone(),
+            "voce": microfone,
             "outros": sc.get_microphone(id=str(alto_falante.name), include_loopback=True),
         }
+        # Trilha extra só para comparar microfones (não entra na transcrição)
+        comparar = _microfone(config.MICROFONE_COMPARAR)
+        if comparar is not None and comparar.name != microfone.name:
+            fontes["comparar"] = comparar
         self._parar.clear()
         self.arquivos = {nome: base.with_name(f"{base.name}-{nome}.wav") for nome in fontes}
         self._trilhas = [_Trilha(dev, self.arquivos[nome], self._parar) for nome, dev in fontes.items()]
@@ -207,7 +224,7 @@ def transcrever(arquivos: dict, progresso=lambda pct: None, reuniao: dict | None
     rotulos = {"voce": config.SEU_NOME, "outros": "Outros participantes"}
     prompt = prompt_contexto(reuniao)
     por_trilha = {}
-    trilhas = [(n, c) for n, c in arquivos.items() if c.exists() and c.stat().st_size > 44]
+    trilhas = [(n, c) for n, c in arquivos.items() if n in rotulos and c.exists() and c.stat().st_size > 44]
     for i, (nome, caminho) in enumerate(trilhas):
         por_trilha[nome] = []
         for inicio, fim, texto, info in transcrever_audio(modelo, _ler_wav(caminho), prompt):

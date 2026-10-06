@@ -13,6 +13,7 @@ O código NÃO vai para o Drive: ele fica no GitHub (git pull).
 
 import json
 import os
+from pathlib import Path
 import threading
 import time
 import traceback
@@ -47,13 +48,24 @@ def marcar_excluido(*nomes: str) -> None:
     EXCLUIDOS_ARQ.write_text(json.dumps(lista, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _caminho_local(nome: str):
+    """Arquivo local correspondente a um nome do Drive — só dentro das pastas do app."""
+    if nome.startswith("ata__"):
+        pasta, arquivo = config.ATAS_DIR, nome[len("ata__"):]
+    elif nome.startswith("grav__"):
+        pasta, arquivo = config.GRAVACOES_DIR, nome[len("grav__"):]
+    else:
+        return None
+    # nome com barra, "..", ou que não seja um arquivo simples: ignora (não deixa sair da pasta)
+    if not arquivo or "/" in arquivo or "\\" in arquivo or ".." in arquivo or ":" in arquivo or Path(arquivo).name != arquivo:
+        return None
+    return pasta / arquivo
+
+
 def _apagar_local(nome: str) -> bool:
     """Apaga a cópia local correspondente a um nome do Drive."""
-    if nome.startswith("ata__"):
-        caminho = config.ATAS_DIR / nome[len("ata__"):]
-    elif nome.startswith("grav__"):
-        caminho = config.GRAVACOES_DIR / nome[len("grav__"):]
-    else:
+    caminho = _caminho_local(nome)
+    if caminho is None:
         return False
     if caminho.exists():
         caminho.unlink()
@@ -137,7 +149,14 @@ def _sincronizar() -> str:
                            props={"atualizado_em": quando_local})
             enviados += 1
         elif remoto and quando_remoto > quando_local:
-            reg = json.loads(g.drive_baixar(remoto["id"]).decode("utf-8"))
+            if _caminho_local(nome) is None:
+                continue
+            try:
+                reg = json.loads(g.drive_baixar(remoto["id"]).decode("utf-8"))
+            except ValueError:
+                continue  # arquivo remoto corrompido: mantém o local
+            if not isinstance(reg, dict):
+                continue
             cli = db.cliente_por_uuid(reg.get("cliente_uuid"))  # o id do cliente muda de um PC para outro
             reg["cliente_id"] = cli["id"] if cli else None
             atas.salvar_bruto(nome[len("ata__"):-len(".json")], reg)
@@ -161,8 +180,10 @@ def _sincronizar() -> str:
                            props={"atualizado_em": quando_local})
             enviados += 1
         elif remoto and quando_remoto > quando_local:
-            g.drive_baixar(remoto["id"], destino=config.GRAVACOES_DIR / nome[len("grav__"):])
-            baixados += 1
+            destino = _caminho_local(nome)
+            if destino is not None:
+                g.drive_baixar(remoto["id"], destino=destino)
+                baixados += 1
 
     # 4) Credencial do Google, para facilitar a instalação em outro PC
     if config.CREDENTIALS_FILE.exists() and "config__credentials.json" not in remotos:

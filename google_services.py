@@ -103,6 +103,8 @@ def _eventos(inicio: datetime, fim: datetime) -> list[dict]:
                     if not a.get("resource")
                 ],
                 "anexos": ev.get("attachments", []),
+                # só quem organizou pode mudar data/hora para todos
+                "organizador": bool((ev.get("organizer") or {}).get("self")),
                 "ja_terminou": datetime.fromisoformat(fim_ev.replace("Z", "+00:00")).astimezone(timezone.utc) < agora
                 if "T" in fim_ev
                 else False,
@@ -129,8 +131,10 @@ def obter_reuniao(event_id: str) -> dict | None:
     return None
 
 
-def agendar_followup(titulo: str, inicio: datetime, duracao_min: int, emails: list[str], descricao: str) -> dict:
-    """Cria um evento com link do Meet e convida os participantes."""
+def agendar_followup(titulo: str, inicio: datetime, duracao_min: int, emails: list[str], descricao: str,
+                     enviar_convites: bool = True) -> dict:
+    """Cria um evento com link do Meet. Com enviar_convites=False o Google não manda e-mail
+    (o convite sai pelo Outlook — ver envio.py)."""
     body = {
         "summary": titulo,
         "description": descricao,
@@ -144,9 +148,38 @@ def agendar_followup(titulo: str, inicio: datetime, duracao_min: int, emails: li
     ev = (
         _svc("calendar", "v3")
         .events()
-        .insert(calendarId="primary", body=body, conferenceDataVersion=1, sendUpdates="all")
+        .insert(calendarId="primary", body=body, conferenceDataVersion=1,
+                sendUpdates="all" if enviar_convites else "none")
         .execute()
     )
+    return {"id": ev["id"], "link_evento": ev.get("htmlLink"), "link_meet": ev.get("hangoutLink")}
+
+
+def obter_evento(event_id: str) -> dict | None:
+    """Um evento da agenda principal pelo id (qualquer data)."""
+    try:
+        ev = _svc("calendar", "v3").events().get(calendarId="primary", eventId=event_id).execute()
+    except HttpError:
+        return None
+    inicio = ev["start"].get("dateTime") or ev["start"].get("date")
+    fim = ev["end"].get("dateTime") or ev["end"].get("date")
+    return {"id": ev["id"], "titulo": ev.get("summary", "(sem título)"), "inicio": inicio, "fim": fim,
+            "dia_inteiro": "T" not in inicio, "link": ev.get("hangoutLink"), "link_agenda": ev.get("htmlLink"),
+            "organizador": bool((ev.get("organizer") or {}).get("self")),
+            "participantes": [a["email"] for a in ev.get("attendees", []) if not a.get("resource") and not a.get("self")]}
+
+
+def remarcar_evento(event_id: str, inicio: datetime, duracao_min: int, titulo: str | None = None,
+                    avisar: bool = True) -> dict:
+    """Muda data/hora (e o título, se informado) e avisa os convidados."""
+    corpo = {
+        "start": {"dateTime": inicio.isoformat(), "timeZone": config.TIMEZONE},
+        "end": {"dateTime": (inicio + timedelta(minutes=duracao_min)).isoformat(), "timeZone": config.TIMEZONE},
+    }
+    if titulo:
+        corpo["summary"] = titulo
+    ev = (_svc("calendar", "v3").events()
+          .patch(calendarId="primary", eventId=event_id, body=corpo, sendUpdates="all" if avisar else "none").execute())
     return {"link_evento": ev.get("htmlLink"), "link_meet": ev.get("hangoutLink")}
 
 
@@ -304,11 +337,16 @@ def drive_baixar(file_id: str, destino=None) -> bytes | None:
     pedido = _svc("drive", "v3").files().get_media(fileId=file_id)
     if destino is None:
         return pedido.execute()
-    with open(destino, "wb") as f:
+    from pathlib import Path
+
+    destino = Path(destino)
+    temporario = destino.with_name(destino.name + ".baixando")
+    with open(temporario, "wb") as f:
         baixador = MediaIoBaseDownload(f, pedido, chunksize=8 * 1024 * 1024)
         terminou = False
         while not terminou:
             _, terminou = baixador.next_chunk()
+    temporario.replace(destino)  # só aparece com o nome final quando chegou inteiro
     return None
 
 

@@ -114,6 +114,7 @@ a.stat:hover{border-color:var(--pri)}
     {% else %}<form class="inline" method="post" action="{{ url_for('gerar', event_id=e.id) }}" data-espera="Gerando…"><button class="sec">Gerar ata</button></form>{% endif %}
   {% else %}
     <a class="btn sec" href="{{ url_for('resumo', event_id=e.id) }}">Resumo</a>
+    {% if e.organizador %}<a class="btn sec" href="{{ url_for('remarcar_reuniao', event_id=e.id, voltar=request.full_path) }}" title="Mudar data e horário">Remarcar</a>{% endif %}
     {% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id=e.id) }}" onsubmit="window.open('{{ e.link }}','_blank')"><button>Entrar e gravar</button></form>
     {% else %}<a class="btn" href="{{ e.link }}" target="_blank">Entrar</a>{% endif %}
   {% endif %}
