@@ -58,6 +58,7 @@ class _Trilha(threading.Thread):
 class Gravador:
     def __init__(self):
         self.ativo = False
+        self.automatica = False  # iniciada pelo monitor do Meet
         self.reuniao = None
         self.inicio = None
         self.arquivos = {}

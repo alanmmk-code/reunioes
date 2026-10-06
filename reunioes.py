@@ -11,7 +11,7 @@ import sys
 import threading
 import traceback
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from flask import Flask, flash, redirect, render_template_string, request, url_for
 
@@ -20,6 +20,7 @@ import atas
 import config
 import google_services as g
 import gravador
+import monitor
 
 app = Flask(__name__)
 app.secret_key = "reunioes-local"
@@ -63,8 +64,17 @@ def enviar_ata(event_id: str, destinatarios: list[str]) -> None:
     atas.salvar(event_id, reg)
 
 
-def processar_gravacao(reuniao: dict, arquivos: dict) -> None:
-    """Roda em segundo plano: Whisper -> Claude -> Google Doc."""
+_fila_processamento = threading.Lock()
+
+
+def processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool = False) -> None:
+    """Roda em segundo plano: Whisper -> Claude -> Google Doc.
+    avisar=True (gravação automática): notifica e abre a ata no navegador ao terminar."""
+    with _fila_processamento:  # uma gravação por vez
+        _processar_gravacao(reuniao, arquivos, avisar)
+
+
+def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
     TAREFA.update(ativa=True, etapa="Transcrevendo o áudio", pct=0, erro=None, transcricao_salva=None,
                   event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
     try:
@@ -77,11 +87,71 @@ def processar_gravacao(reuniao: dict, arquivos: dict) -> None:
         TAREFA.update(etapa="Escrevendo a ata com o Claude", pct=100, transcricao_salva=str(txt))
         processar(reuniao, texto, f"Gravação no PC + Whisper ({config.WHISPER_MODELO})")
         TAREFA.update(etapa="Concluído")
+        if avisar:
+            monitor.notificar("Ata pronta", reuniao.get("titulo", ""))
+            webbrowser.open(f"http://localhost:{config.PORTA}/ata/{reuniao['id']}")
     except Exception as e:
         traceback.print_exc()
         TAREFA.update(erro=str(e))
+        if avisar:
+            monitor.notificar("Erro ao gerar a ata", str(e)[:150])
     finally:
         TAREFA["ativa"] = False
+
+
+# ---------------------------------------------------------------- Gravação automática
+
+def _reuniao_da_janela(titulo_janela: str) -> dict:
+    """Associa a chamada detectada a um evento da agenda (pelo código do Meet)."""
+    codigo, nome = monitor.info_da_janela(titulo_janela)
+    try:
+        agora = datetime.now().astimezone()
+        candidatos = g.listar_reunioes(dias_atras=1, dias_frente=1)
+        for r in candidatos:
+            if codigo and r["codigo_meet"] == codigo:
+                return r
+        # Sem código no título: usa o evento da agenda que está acontecendo agora, se houver só um
+        em_andamento = [
+            r for r in candidatos
+            if "T" in r["inicio"]
+            and datetime.fromisoformat(r["inicio"]) - timedelta(minutes=15) <= agora <= datetime.fromisoformat(r["fim"])
+        ]
+        if not codigo and len(em_andamento) == 1:
+            return em_andamento[0]
+    except Exception:
+        traceback.print_exc()
+    return {"id": f"avulsa-{datetime.now():%Y%m%d%H%M%S}", "titulo": nome if nome != codigo else "Reunião do Meet",
+            "inicio": datetime.now().isoformat(timespec="minutes"), "descricao": "", "participantes": []}
+
+
+def ao_detectar_meet(titulo_janela: str) -> None:
+    if GRAVADOR.ativo:
+        return
+    reuniao = _reuniao_da_janela(titulo_janela)
+    try:
+        GRAVADOR.iniciar(reuniao)
+        GRAVADOR.automatica = True
+        print(f"[monitor] gravando: {reuniao['titulo']}")
+        monitor.notificar("Gravando reunião", f"{reuniao['titulo']} — a ata será gerada quando você sair da chamada.")
+    except Exception as e:
+        traceback.print_exc()
+        monitor.notificar("Não consegui gravar a reunião", str(e)[:150])
+
+
+def ao_encerrar_meet() -> None:
+    if not (GRAVADOR.ativo and GRAVADOR.automatica):
+        return
+    segundos = (datetime.now() - GRAVADOR.inicio).total_seconds()
+    reuniao, arquivos = GRAVADOR.parar()
+    GRAVADOR.automatica = False
+    if segundos < config.DURACAO_MINIMA_SEG:
+        for c in arquivos.values():
+            c.unlink(missing_ok=True)
+        print(f"[monitor] gravação de {segundos:.0f}s descartada (curta demais)")
+        return
+    print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; gerando ata")
+    monitor.notificar("Reunião encerrada", "Transcrevendo e gerando a ata…")
+    threading.Thread(target=processar_gravacao, args=(reuniao, arquivos, True), daemon=True).start()
 
 
 def modo_auto() -> None:
@@ -211,6 +281,7 @@ def parar():
     if GRAVADOR.ativo:
         try:
             reuniao, arquivos = GRAVADOR.parar()
+            GRAVADOR.automatica = False
             TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=reuniao["id"])
             threading.Thread(target=processar_gravacao, args=(reuniao, arquivos), daemon=True).start()
         except Exception as e:
@@ -226,6 +297,7 @@ def gravacao():
     return pagina(
         """{% if gravando %}<meta http-equiv="refresh" content="5">
 <h1 style="color:#d93025">● Gravando</h1><p><b>{{ titulo }}</b> · {{ duracao }}</p>
+{% if automatica %}<p>Gravação automática: ela para sozinha quando você sair da chamada do Meet.</p>{% endif %}
 <p class="mut">Gravando seu microfone e o áudio da chamada. Pode minimizar esta página.
 Use <b>fone de ouvido</b> para a transcrição separar melhor quem falou.</p>
 <form method="post" action="{{ url_for('parar') }}" data-espera="Parando…"><button>■ Parar e gerar ata</button></form>
@@ -239,6 +311,7 @@ e leva aproximadamente de 1/4 a 1/2 da duração da reunião.</p>{% endif %}
 Você pode colá-la em "Colar transcrição".</p>{% endif %}
 {% else %}<h1>Nenhuma gravação em andamento</h1>{% endif %}""",
         gravando=GRAVADOR.ativo,
+        automatica=GRAVADOR.automatica,
         titulo=(GRAVADOR.reuniao or {}).get("titulo", ""),
         duracao=GRAVADOR.duracao(),
         tarefa=TAREFA,
@@ -386,5 +459,8 @@ if __name__ == "__main__":
         if sys.stdout is None:  # iniciado sem janela (pythonw, inicialização do Windows)
             log = open(config.BASE_DIR / "reunioes.log", "a", encoding="utf-8", buffering=1)
             sys.stdout = sys.stderr = log
+        if config.GRAVACAO_AUTOMATICA:
+            monitor.iniciar(ao_detectar_meet, ao_encerrar_meet, lambda: GRAVADOR.ativo and GRAVADOR.automatica)
+            print("[monitor] vigiando chamadas do Meet")
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         app.run(port=config.PORTA, debug=False)

@@ -24,6 +24,10 @@ GRAVACOES_DIR = BASE_DIR / "gravacoes"
 GRAVACOES_DIR.mkdir(exist_ok=True)
 WHISPER_MODELO = os.getenv("WHISPER_MODELO", "small")  # tiny, base, small, medium, large-v3-turbo
 SEU_NOME = os.getenv("SEU_NOME", "Eu")
+# Gravar sozinho quando uma chamada do Meet for detectada no navegador
+GRAVACAO_AUTOMATICA = os.getenv("GRAVACAO_AUTOMATICA", "sim").lower() in ("sim", "s", "true", "1")
+# Gravações automáticas mais curtas que isso são descartadas (ex.: teste de câmera)
+DURACAO_MINIMA_SEG = int(os.getenv("DURACAO_MINIMA_SEG", "60"))
 
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",  # ler agenda e agendar follow-ups
