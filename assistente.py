@@ -4,7 +4,7 @@ import threading
 import time
 import traceback
 
-import anthropic
+
 import numpy as np
 from pydantic import BaseModel, Field
 
@@ -12,11 +12,13 @@ import atas
 import config
 import db
 import gravador
+import ia
 
 MIN_TRECHO = 5  # segundos de áudio antes de transcrever um trecho
 MAX_TRECHO = 15  # transcreve mesmo sem pausa ao chegar nisso
 SILENCIO = 0.004  # volume (RMS) abaixo disso = silêncio
-INTERVALO_AUTO = 12  # segundos mínimos entre análises automáticas
+INTERVALO_AUTO = 12  # segundos mínimos entre análises automáticas (via API)
+INTERVALO_AUTO_PLANO = 45  # idem, via assinatura (Claude Code)
 
 
 class Sugestao(BaseModel):
@@ -96,7 +98,19 @@ class AoVivo:
         self._ultima_auto = 0.0
         self._novidade_outros = False
         self._contexto = _contexto(reuniao)
-        self._client = anthropic.Anthropic()
+        # Pela assinatura (Claude Code) cada consulta é mais lenta e gasta cota do plano:
+        # sugere sozinho só quando parece haver pergunta ou o seu nome, e com mais espaço entre consultas
+        self._so_com_gatilho = config.IA_MODO != "api"
+        self._intervalo_auto = INTERVALO_AUTO_PLANO if self._so_com_gatilho else INTERVALO_AUTO
+
+    @staticmethod
+    def _parece_dirigido(texto: str) -> bool:
+        t = texto.lower()
+        nome = config.SEU_NOME.lower().strip()
+        # o Whisper às vezes erra o final do nome ("Alam" em vez de "Alan")
+        return "?" in t or (len(nome) >= 3 and nome[:3] in t) or any(
+            p in t for p in ("você acha", "o que acha", "consegue", "pode me", "qual o", "qual a", "quanto", "quando")
+        )
 
     # ---------------------------------------------------------- ciclo
 
@@ -117,7 +131,7 @@ class AoVivo:
                 for nome in ("outros", "voce"):
                     self._ouvir(nome)
                 if (self._novidade_outros and not self.pensando
-                        and time.time() - self._ultima_auto >= INTERVALO_AUTO):
+                        and time.time() - self._ultima_auto >= self._intervalo_auto):
                     self._novidade_outros = False
                     self._ultima_auto = time.time()
                     threading.Thread(target=self._sugerir, args=(False,), daemon=True).start()
@@ -154,7 +168,8 @@ class AoVivo:
             seg = (inicio + s.start, inicio + s.end, texto)
             if nome == "outros":
                 self._segs_outros.append(seg)
-                self._novidade_outros = True
+                if not self._so_com_gatilho or self._parece_dirigido(texto):
+                    self._novidade_outros = True
             elif gravador._eco(seg, self._segs_outros[-20:]):
                 continue
             quem = "Outros participantes" if nome == "outros" else config.SEU_NOME
@@ -186,23 +201,10 @@ class AoVivo:
             )
             if self.sugestao and self.sugestao.get("pergunta"):
                 instrucao += f"\nÚltima sugestão já mostrada (não repita se nada mudou): {self.sugestao['pergunta']}"
-            conteudo = [{"type": "text", "text": f"<contexto>\n{self._contexto}\n</contexto>"}]
-            conteudo += [{"type": "text", "text": f"<transcricao_parte>\n{lote}\n</transcricao_parte>"} for lote in self._lotes]
-            conteudo.append({"type": "text", "text": instrucao})
-            resp = self._client.beta.messages.parse(
-                model=config.CLAUDE_MODEL,
-                max_tokens=4000,
-                system=SYSTEM.format(nome=config.SEU_NOME),
-                cache_control={"type": "ephemeral"},
-                output_config={"effort": "low"},  # rapidez importa mais que profundidade aqui
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-                messages=[{"role": "user", "content": conteudo}],
-                output_format=Sugestao,
-            )
-            s = resp.parsed_output
-            if resp.stop_reason == "refusal" or s is None:
-                return
+            blocos = [f"<contexto>\n{self._contexto}\n</contexto>"]
+            blocos += [f"<transcricao_parte>\n{lote}\n</transcricao_parte>" for lote in self._lotes]
+            s = ia.gerar(SYSTEM.format(nome=config.SEU_NOME), blocos, instrucao, Sugestao,
+                         effort="low")  # rapidez importa mais que profundidade aqui
             if s.deve_sugerir or pedido_pelo_usuario:
                 self.sugestao = {"pergunta": s.pergunta, "respostas": s.respostas, "lembrar": s.lembrar,
                                  "hora": time.strftime("%H:%M:%S")}

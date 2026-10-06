@@ -7,6 +7,10 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
+# Como falar com o Claude: claude_code (sua assinatura, sem créditos), api (créditos) ou auto
+IA_MODO = os.getenv("IA_MODO", "claude_code").lower()
+# Modelo usado pelo Claude Code (vazio = o padrão do seu plano)
+CLAUDE_CODE_MODELO = os.getenv("CLAUDE_CODE_MODELO", "")
 TIMEZONE = os.getenv("TIMEZONE", "America/Sao_Paulo")
 AUTO_ENVIAR_EMAIL = os.getenv("AUTO_ENVIAR_EMAIL", "nao").lower() in ("sim", "s", "true", "1")
 PORTA = int(os.getenv("PORTA", "5055"))

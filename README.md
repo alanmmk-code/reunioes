@@ -23,10 +23,16 @@ py -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-### 2. Chave do Claude
+### 2. Acesso ao Claude
 
-1. Crie uma chave em https://console.anthropic.com/settings/keys
-2. Copie `.env.example` para `.env` e cole a chave em `ANTHROPIC_API_KEY`.
+Copie `.env.example` para `.env`. Por padrão (`IA_MODO=claude_code`) a ferramenta usa o **Claude Code
+logado com a sua assinatura do Claude** (Pro/Max): não precisa de créditos de API, só de ter o Claude Code
+instalado e logado (`claude` no terminal → `/login`). O uso conta na cota do seu plano.
+
+Se preferir a API (cobrança por uso), crie uma chave em https://console.anthropic.com/settings/keys,
+coloque em `ANTHROPIC_API_KEY` e use `IA_MODO=api` (ou `auto`, que usa a API e cai para o plano se faltar crédito).
+Pela assinatura, as sugestões ao vivo demoram ~10 s e só disparam sozinhas quando a fala parece uma pergunta
+ou cita o seu nome (o botão "O que eu respondo?" sempre funciona).
 
 ### 3. Google Cloud (credentials.json)
 

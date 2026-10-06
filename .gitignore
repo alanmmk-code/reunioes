@@ -7,3 +7,4 @@ __pycache__/
 reunioes.log
 gravacoes/
 dados.db
+.claude_code/

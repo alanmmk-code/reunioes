@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
-import anthropic
 from pydantic import BaseModel, Field
 
 import config
+import ia
 
 
 class Topico(BaseModel):
@@ -58,7 +58,6 @@ separado do que ficou com o cliente.
 
 
 def gerar_ata(transcricao: str, reuniao: dict) -> Ata:
-    client = anthropic.Anthropic()
     convidados = ", ".join(
         f"{p['nome'] or p['email']} <{p['email']}>" for p in reuniao.get("participantes", [])
     ) or "não informado"
@@ -73,25 +72,10 @@ def gerar_ata(transcricao: str, reuniao: dict) -> Ata:
         f"Data de hoje: {datetime.now().strftime('%Y-%m-%d')}"
     )
 
-    resposta = client.beta.messages.parse(
-        model=config.CLAUDE_MODEL,
-        max_tokens=16000,
-        system=SYSTEM,
-        output_config={"effort": "high"},
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        messages=[
-            {
-                "role": "user",
-                "content": f"<contexto>\n{contexto}\n</contexto>\n\n<transcricao>\n{transcricao}\n</transcricao>\n\n"
-                "Escreva a ata desta reunião.",
-            }
-        ],
-        output_format=Ata,
+    return ia.gerar(
+        SYSTEM,
+        [f"<contexto>\n{contexto}\n</contexto>", f"<transcricao>\n{transcricao}\n</transcricao>"],
+        "Escreva a ata desta reunião.",
+        Ata,
+        effort="high",
     )
-
-    if resposta.stop_reason == "refusal":
-        raise RuntimeError("O modelo recusou processar esta transcrição.")
-    if resposta.stop_reason == "max_tokens" or resposta.parsed_output is None:
-        raise RuntimeError("A resposta do modelo veio incompleta. Tente novamente.")
-    return resposta.parsed_output
