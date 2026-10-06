@@ -75,6 +75,10 @@ a.stat:hover{border-color:var(--pri)}
 <a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></span></div>
 {% elif tarefa.ativa %}<div class="alerta pend"><b>⏳ Gerando ata: {{ tarefa.etapa }}{% if tarefa.etapa.startswith('Transcrevendo') %} ({{ tarefa.pct }}%){% endif %}</b>
 <a class="btn sec" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
+{% for e in presos %}<div class="alerta rec"><b>{{ e.tipo|capitalize }} preso no Outlook ({{ e.remetente }}): "{{ e.assunto }}" para {{ e.para|join(', ') }} — enviado às {{ e.momento }}.
+Abra o Outlook e aperte F9 (Enviar/Receber).</b>
+<span style="display:flex;gap:6px"><form class="inline" method="post" action="{{ url_for('envio_acao', envio_id=e.id, acao='conferir') }}"><button class="sec">Conferir de novo</button></form>
+<form class="inline" method="post" action="{{ url_for('envio_acao', envio_id=e.id, acao='dispensar') }}"><button class="sec">Dispensar</button></form></span></div>{% endfor %}
 {% for p in pendentes %}<div class="alerta pend"><b>Gravação aguardando decisão: {{ p.reuniao.titulo }} · {{ p.minutos }} min</b>
 <a class="btn" href="{{ url_for('pendente', pid=p.pid) }}">Gerar ata?</a></div>{% endfor %}
 

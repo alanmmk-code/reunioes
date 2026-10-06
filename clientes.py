@@ -268,4 +268,11 @@ def status_sistema(estado_sinc: dict, monitor_ligado: bool) -> list[dict]:
         itens.append({"nome": "Drive", "ok": not estado_sinc.get("erro"),
                       "detalhe": estado_sinc.get("erro") or (f"sincronizado às {ultima:%H:%M}" if ultima else "aguardando")})
     itens.append({"nome": "Detector do Meet", "ok": monitor_ligado, "detalhe": "ligado" if monitor_ligado else "desligado"})
+    import envio
+
+    aberto = envio.outlook_aberto()
+    contas = envio.contas()
+    itens.append({"nome": "Outlook", "ok": aberto,
+                  "detalhe": (f"aberto ({len(contas)} contas)" if aberto
+                              else "fechado — abra o Outlook para os e-mails e convites saírem")})
     return itens

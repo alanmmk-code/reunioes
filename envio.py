@@ -148,6 +148,7 @@ def enviar_email(remetente: str, destinatarios, assunto: str, html: str) -> list
         msg.Send()
 
     _no_outlook(enviar)
+    _vigiar("e-mail", remetente, assunto, para)
     return para
 
 
@@ -187,7 +188,9 @@ def enviar_convite(remetente: str, convidados, titulo: str, inicio: datetime, du
         item.Send()
         return item.EntryID
 
-    return _no_outlook(criar)
+    entry_id = _no_outlook(criar)
+    _vigiar("convite", remetente, titulo, para)
+    return entry_id
 
 
 def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo: str | None = None) -> None:
@@ -202,8 +205,83 @@ def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo:
             item.Subject = titulo
         item.Save()
         item.Send()
+        conta = item.SendUsingAccount
+        return (conta.SmtpAddress if conta else remetente_padrao()), item.Subject, [r.Address for r in item.Recipients]
 
-    _no_outlook(atualizar)
+    remetente, assunto, para = _no_outlook(atualizar)
+    _vigiar("atualização de convite", remetente, assunto, para)
+
+
+# ---------------------------------------------------------------- conferência: a mensagem saiu da Caixa de Saída?
+
+ENVIOS = []  # [{id, tipo, remetente, assunto, para, momento, estado}] — estado: conferindo | enviado | preso | dispensado
+_seq = {"n": 0}
+OL_FOLDER_OUTBOX = 4
+
+
+def _na_caixa_de_saida(ol, envio: dict) -> bool:
+    conta = _conta(ol, envio["remetente"])
+    for item in conta.DeliveryStore.GetDefaultFolder(OL_FOLDER_OUTBOX).Items:
+        try:
+            if (item.Subject or "") == envio["assunto"]:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def conferir(envio: dict) -> str:
+    """Confere agora; devolve o novo estado."""
+    try:
+        preso = _no_outlook(_na_caixa_de_saida, envio)
+    except Exception as erro:
+        envio["detalhe"] = f"não consegui conferir: {erro}"
+        return envio["estado"]
+    envio["estado"] = "preso" if preso else "enviado"
+    envio["conferido_em"] = datetime.now().strftime("%H:%M")
+    return envio["estado"]
+
+
+def _vigiar(tipo: str, remetente: str, assunto: str, para: list[str]) -> None:
+    _seq["n"] += 1
+    envio = {"id": _seq["n"], "tipo": tipo, "remetente": remetente, "assunto": assunto, "para": para,
+             "momento": datetime.now().strftime("%H:%M"), "estado": "conferindo"}
+    ENVIOS.append(envio)
+    del ENVIOS[:-50]  # guarda só os últimos
+
+    def depois():
+        for espera in (60, 120):  # confere com 1 e com 3 minutos
+            time.sleep(espera)
+            if envio["estado"] == "dispensado" or conferir(envio) == "enviado":
+                return
+        if envio["estado"] == "preso":
+            try:
+                import monitor
+
+                monitor.notificar(f"{tipo.capitalize()} preso no Outlook — {remetente}",
+                                  f"\"{assunto[:60]}\" não saiu da Caixa de Saída. Abra o Outlook e aperte F9 (Enviar/Receber).",
+                                  f"http://localhost:{config.PORTA}/")
+            except Exception:
+                pass
+
+    threading.Thread(target=depois, daemon=True, name="confere-envio").start()
+
+
+def presos() -> list[dict]:
+    return [e for e in ENVIOS if e["estado"] == "preso"]
+
+
+def outlook_aberto() -> bool:
+    """Outlook rodando com janela (sem janela ele pode não enviar as contas IMAP/Gmail)."""
+    try:
+        import psutil
+
+        import monitor
+
+        rodando = any((p.info["name"] or "").lower() == "outlook.exe" for p in psutil.process_iter(["name"]))
+        return rodando and any(t.endswith("- Outlook") for t in monitor.titulos_janelas())
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- convites enviados (evento do Google -> Outlook)

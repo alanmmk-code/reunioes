@@ -273,6 +273,19 @@ def vigiar_janela() -> None:
     threading.Thread(target=loop, daemon=True, name="vigia-janela").start()
 
 
+@app.post("/envio/<int:envio_id>/<acao>")
+def envio_acao(envio_id, acao):
+    """Conferir de novo / dispensar um e-mail ou convite que ficou preso no Outlook."""
+    e = next((x for x in envio.ENVIOS if x["id"] == envio_id), None)
+    if e and acao == "dispensar":
+        e["estado"] = "dispensado"
+    elif e and acao == "conferir":
+        estado = envio.conferir(e)
+        flash("Saiu! Não está mais na Caixa de Saída." if estado == "enviado"
+              else "Continua na Caixa de Saída do Outlook. Abra o Outlook, entre na conta e aperte F9 (Enviar/Receber).")
+    return redirect(request.referrer or url_for("inicio"))
+
+
 @app.post("/api/janela/fechada")
 def api_janela_fechada():
     JANELA["fechada_pelo_usuario"] = True
@@ -574,7 +587,7 @@ def inicio():
         semana=semana, semana_txt=semana_txt, dias=dias, eventos_hoje=eventos_hoje,
         minhas=minhas, recentes=recentes, feitas=atas.existentes(), pendentes=listar_pendentes(),
         gravando=GRAVADOR.ativo, titulo_gravacao=(GRAVADOR.reuniao or {}).get("titulo", ""), tarefa=TAREFA,
-        seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME, historico=historico,
+        seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME, historico=historico, presos=envio.presos(),
         atencao=clientes.precisam_de_atencao(),
         status=clientes.status_sistema(sincronia.ESTADO, config.GRAVACAO_AUTOMATICA),
     )
@@ -1280,6 +1293,8 @@ def cliente_novo():
         return redirect(request.referrer or url_for("tarefas"))
     cid = db.criar_cliente(nome, request.form.get("emails", ""))
     flash(f"Cliente {nome} cadastrado. Ele já aparece para escolher quando você abrir o Meet.")
+    if request.form.get("depois") == "nova_reuniao":  # cadastrado pela tela de nova reunião: volta com ele escolhido
+        return redirect(url_for("nova_reuniao", cliente=cid))
     if request.form.get("abrir"):
         return redirect(url_for("ficha_cliente", cliente_id=cid))
     return redirect(request.referrer or url_for("tarefas"))

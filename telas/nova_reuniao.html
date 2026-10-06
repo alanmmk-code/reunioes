@@ -4,7 +4,21 @@
 <span class="mut">Cliente:</span>
 <select name="cliente" onchange="this.form.submit()" style="width:auto"><option value="">— sem cliente —</option>
 {% for x in clientes %}<option value="{{ x.id }}" {{ 'selected' if c and x.id == c.id }}>{{ x.nome }}</option>{% endfor %}</select>
+<button type="button" class="sec" onclick="document.getElementById('novo-cli').showModal()">+ Novo cliente</button>
 {% if c %}<span class="mut">convidados e pauta preenchidos com os dados de {{ c.nome }}</span>{% endif %}</form>
+
+<dialog id="novo-cli" class="modal">
+<form method="post" action="{{ url_for('cliente_novo') }}">
+<h2 style="margin-top:0">Novo cliente</h2>
+<label class="mut">Nome <input name="nome" required autofocus placeholder="Ex.: Plásticos Ivone"></label>
+<label class="mut">E-mails ou domínio do cliente <span>(opcional)</span>
+<input name="emails" placeholder="Ex.: filipe@ivone.com, @ivone.com"></label>
+<p class="mut" style="margin:0;font-size:12.5px">Os e-mails entram como convidados desta reunião. Com o domínio (ex.: <b>@ivone.com</b>),
+o Meet passa a reconhecer o cliente sozinho.</p>
+<input type="hidden" name="depois" value="nova_reuniao">
+<div class="row" style="justify-content:flex-end;gap:8px;margin-top:6px">
+<button type="button" class="sec" onclick="this.closest('dialog').close()">Cancelar</button><button>Cadastrar e usar nesta reunião</button></div>
+</form></dialog>
 
 <form method="post" class="card" data-espera="Criando…" style="display:grid;gap:10px">
 <input type="hidden" name="cliente_id" value="{{ c.id if c else '' }}">
