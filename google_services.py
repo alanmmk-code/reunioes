@@ -51,8 +51,9 @@ def _svc(name: str, version: str):
 def autenticar() -> str:
     """Força o login e devolve o e-mail da conta conectada."""
     _credentials()
-    info = _svc("calendar", "v3").calendars().get(calendarId="primary").execute()
-    return info.get("id", "")
+    # events.list é coberto pelo escopo calendar.events; o "summary" da agenda principal é o e-mail
+    info = _svc("calendar", "v3").events().list(calendarId="primary", maxResults=1).execute()
+    return info.get("summary", "")
 
 
 # ---------------------------------------------------------------- Agenda
