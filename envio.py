@@ -105,6 +105,23 @@ def _conta(ol, remetente: str):
     raise ValueError(f"A conta {remetente} não está configurada no Outlook deste PC.")
 
 
+OL_FOLDER_DRAFTS = 16
+
+
+def _usar_conta(item, conta) -> None:
+    """Define a conta de envio. No pywin32, `item.SendUsingAccount = conta` é ignorado em silêncio
+    (o item sai pela conta padrão do Outlook); é preciso atribuir por referência (DISPATCH_PROPERTYPUTREF)."""
+    item._oleobj_.Invoke(64209, 0, 8, 0, conta)  # 64209 = SendUsingAccount, 8 = PROPERTYPUTREF
+
+
+def _novo_email(ol, conta):
+    """E-mail criado nos Rascunhos da própria conta (assim a cópia vai para os Enviados dela)."""
+    try:
+        return conta.DeliveryStore.GetDefaultFolder(OL_FOLDER_DRAFTS).Items.Add(OL_MAIL)
+    except Exception:
+        return ol.CreateItem(OL_MAIL)
+
+
 def _destinos(lista) -> list[str]:
     if isinstance(lista, str):
         lista = lista.replace(";", ",").split(",")
@@ -121,11 +138,13 @@ def enviar_email(remetente: str, destinatarios, assunto: str, html: str) -> list
 
     def enviar(ol):
         conta = _conta(ol, remetente)
-        msg = ol.CreateItem(OL_MAIL)
+        msg = _novo_email(ol, conta)
         msg.To = "; ".join(para)
         msg.Subject = assunto
         msg.HTMLBody = html
-        msg.SendUsingAccount = conta
+        _usar_conta(msg, conta)
+        if msg.SendUsingAccount.SmtpAddress.lower() != remetente.lower():
+            raise RuntimeError(f"O Outlook não aceitou enviar pela conta {remetente}.")
         msg.Send()
 
     _no_outlook(enviar)
@@ -161,10 +180,9 @@ def enviar_convite(remetente: str, convidados, titulo: str, inicio: datetime, du
         for email in para:
             item.Recipients.Add(email)
         item.Recipients.ResolveAll()
-        try:
-            item.SendUsingAccount = conta
-        except Exception:
-            pass
+        _usar_conta(item, conta)
+        if item.SendUsingAccount.SmtpAddress.lower() != remetente.lower():
+            raise RuntimeError(f"O Outlook não aceitou enviar o convite pela conta {remetente}.")
         item.Save()
         item.Send()
         return item.EntryID
