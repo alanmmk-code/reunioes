@@ -504,6 +504,7 @@ def inicio():
         dias.append({"data": d, "semana": DIAS_SEMANA[i], "hoje": d == hoje, "passado": d < hoje, "eventos": do_dia,
                      "tarefas": [t for t in minhas if t["prazo"] == d.isoformat()]})
 
+    historico = historico_por_cliente()
     eventos_hoje = sum(
         1 for e in eventos_de_hoje
         if (date.fromisoformat(e["inicio"]) <= hoje < date.fromisoformat(e["fim"]) if e["dia_inteiro"]
@@ -522,8 +523,51 @@ def inicio():
         semana=semana, semana_txt=semana_txt, dias=dias, eventos_hoje=eventos_hoje,
         minhas=minhas, recentes=recentes, feitas=atas.existentes(), pendentes=listar_pendentes(),
         gravando=GRAVADOR.ativo, titulo_gravacao=(GRAVADOR.reuniao or {}).get("titulo", ""), tarefa=TAREFA,
-        seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME,
+        seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME, historico=historico,
     )
+
+
+def _breve(texto: str, limite: int = 220) -> str:
+    """As primeiras frases do resumo, para bater o olho e entender a conversa."""
+    texto = (texto or "").strip()
+    if len(texto) <= limite:
+        return texto
+    corte = texto.rfind(". ", 0, limite)
+    return texto[: corte + 1] if corte > 80 else texto[:limite].rsplit(" ", 1)[0] + "…"
+
+
+def historico_por_cliente() -> list[dict]:
+    """Atas agrupadas por cliente (mais recentes primeiro); clientes com reunião mais recente no topo."""
+    nomes = {c["id"]: c["nome"] for c in db.clientes()}
+    grupos = {}
+    for event_id in atas.existentes():
+        reg = atas.carregar(event_id) or {}
+        a, r = reg.get("ata"), reg.get("reuniao", {})
+        if not a:
+            continue
+        cid = reg.get("cliente_id") if reg.get("cliente_id") in nomes else None
+        acoes = a.get("acoes", [])
+        grupos.setdefault(cid, []).append({
+            "event_id": event_id,
+            "titulo": a.get("titulo") or r.get("titulo", "Reunião"),
+            "inicio": r.get("inicio", ""),
+            "breve": _breve(a.get("resumo", "")),
+            "resumo": a.get("resumo", ""),
+            "decisoes": a.get("decisoes", []),
+            "acoes_minhas": [x for x in acoes if x.get("do_usuario", True)],
+            "acoes_cliente": [x for x in acoes if not x.get("do_usuario", True)],
+            "doc_link": reg.get("doc_link"),
+            "busca": " ".join([nomes.get(cid, ""), a.get("titulo", ""), r.get("titulo", ""), a.get("resumo", ""),
+                               " ".join(a.get("decisoes", []))]).lower(),
+        })
+    lista = []
+    for cid, reunioes_cli in grupos.items():
+        reunioes_cli.sort(key=lambda x: x["inicio"], reverse=True)
+        lista.append({"cliente_id": cid, "nome": nomes.get(cid, "Sem cliente"), "reunioes": reunioes_cli,
+                      "ultima": reunioes_cli[0]["inicio"]})
+    lista.sort(key=lambda x: x["ultima"], reverse=True)  # reunião mais recente primeiro
+    lista.sort(key=lambda x: x["cliente_id"] is None)  # "Sem cliente" por último
+    return lista
 
 
 @app.post("/gravar/<event_id>")

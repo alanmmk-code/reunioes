@@ -91,6 +91,10 @@ A página inicial do painel (http://localhost:5055) reúne tudo:
   Os prazos das suas tarefas aparecem no dia em que vencem.
 - **Minhas tarefas**: concluir com um clique e adicionar tarefa rápida.
 - **Reuniões recentes** e o status das atas.
+- **Histórico de reuniões por cliente**: cada cliente com as reuniões em linha do tempo (mais recente
+  primeiro) e um resumo curto de cada conversa; clicando, aparecem o resumo completo, as decisões, o que
+  ficou com você e com o cliente, e os botões **Ver ata** e **Google Doc**. A busca filtra por cliente,
+  assunto ou decisão.
 
 A aba **Tarefas** continua para a gestão completa (filtros, tarefas do cliente, clientes).
 

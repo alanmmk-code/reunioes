@@ -149,3 +149,84 @@ a.stat:hover{border-color:var(--pri)}
 </section>
 </div>
 </div>
+
+
+<!-- ===================== HISTÓRICO POR CLIENTE ===================== -->
+<style>
+.hist{margin-top:22px}
+.hist-h{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--bd)}
+.hist-h h2{margin:0;font-size:15px}
+.hist-h input{max-width:320px}
+.cli{border-bottom:1px solid var(--bd)}
+.cli:last-child{border-bottom:0}
+.cli>summary{display:flex;align-items:center;gap:12px;padding:12px 16px}
+.cli>summary:hover{background:var(--card2)}
+.cli>summary .av{width:32px;height:32px;border-radius:9px;background:var(--pri-s);color:var(--pri);display:grid;place-items:center;font-weight:700;flex:none}
+.cli>summary .nm{font-weight:600}
+.cli>summary .info{color:var(--mut);font-size:12.5px}
+.cli>summary .seta{margin-left:auto;color:var(--mut);transition:transform .15s}
+.cli[open]>summary .seta{transform:rotate(90deg)}
+.cli.sem>summary .av{background:var(--card2);color:var(--mut)}
+.linha{position:relative;margin:0 16px 14px 31px;padding-left:20px;border-left:2px solid var(--bd)}
+.mt{position:relative;margin:0;padding:10px 0}
+.mt::before{content:"";position:absolute;left:-27px;top:16px;width:10px;height:10px;border-radius:50%;background:var(--card);border:2px solid var(--pri)}
+.mt>summary{display:block}
+.mt .dt{font-size:12px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.mt .tt{font-weight:600;margin:2px 0}
+.mt .br{color:var(--tx2);font-size:13.5px;line-height:1.5}
+.mt .mais{font-size:12.5px;color:var(--pri)}
+.mt[open] .mais,.mt[open] .br{display:none}
+.mt .det{margin-top:8px;background:var(--card2);border:1px solid var(--bd);border-radius:10px;padding:12px 14px;font-size:13.5px}
+.mt .det p{margin:0 0 10px}
+.mt .det b.rot{display:block;font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.03em;margin:10px 0 4px}
+.mt .det ul{margin:0;padding-left:18px}
+.mt .det .ac{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.mt .det .ac .btn{padding:5px 12px;font-size:13px}
+.hist .nada{padding:24px 16px;color:var(--mut);text-align:center}
+</style>
+<section class="box hist">
+<div class="hist-h"><h2>Histórico de reuniões por cliente</h2>
+<input type="search" id="busca-hist" placeholder="Buscar cliente, assunto ou decisão…" oninput="filtrarHistorico(this.value)"></div>
+{% for grp in historico %}
+<details class="cli {{ 'sem' if grp.cliente_id is none }}" data-busca="{{ grp.reunioes|map(attribute='busca')|join(' ') }}" {{ 'open' if loop.first }}>
+<summary><div class="av">{{ grp.nome[:1]|upper if grp.cliente_id is not none else '?' }}</div>
+<div><div class="nm">{{ grp.nome }}</div>
+<div class="info">{{ grp.reunioes|length }} {{ 'reuniões' if grp.reunioes|length > 1 else 'reunião' }}{% if grp.ultima %} · última em {{ grp.ultima[8:10] }}/{{ grp.ultima[5:7] }}/{{ grp.ultima[0:4] }}{% endif %}</div></div>
+<span class="seta">›</span></summary>
+<div class="linha">
+{% for m in grp.reunioes %}
+<details class="mt" data-busca="{{ m.busca }}">
+<summary><div class="dt">{{ m.inicio[8:10] }}/{{ m.inicio[5:7] }}/{{ m.inicio[0:4] }}{% if m.inicio[11:16] %} · {{ m.inicio[11:16] }}{% endif %}</div>
+<div class="tt">{{ m.titulo }}</div>
+<div class="br">{{ m.breve or 'Sem resumo.' }}</div>
+<span class="mais">Ver mais ▾</span></summary>
+<div class="det">
+<p>{{ m.resumo }}</p>
+{% if m.decisoes %}<b class="rot">Decisões</b><ul>{% for d in m.decisoes %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+{% if m.acoes_minhas %}<b class="rot">Ficou com você</b><ul>{% for x in m.acoes_minhas %}<li>{{ x.tarefa }}{% if x.prazo and x.prazo != 'A definir' %} <span class="mut">· até {{ x.prazo[8:10] }}/{{ x.prazo[5:7] }}</span>{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if m.acoes_cliente %}<b class="rot">Ficou com o cliente</b><ul>{% for x in m.acoes_cliente %}<li>{{ x.tarefa }} <span class="mut">· {{ x.responsavel }}</span></li>{% endfor %}</ul>{% endif %}
+<div class="ac"><a class="btn" href="{{ url_for('ver_ata', event_id=m.event_id) }}">Ver ata</a>
+{% if m.doc_link and m.doc_link.startswith('http') %}<a class="btn sec" href="{{ m.doc_link }}" target="_blank">Google Doc</a>{% endif %}
+{% if grp.cliente_id is none %}<a class="btn sec" href="{{ url_for('ver_ata', event_id=m.event_id) }}">Definir cliente</a>{% endif %}</div>
+</div></details>
+{% endfor %}
+</div></details>
+{% else %}<div class="nada">Ainda não há atas. Quando você gerar a ata de uma reunião, ela aparece aqui, no cliente certo.</div>{% endfor %}
+<div class="nada" id="hist-vazio" style="display:none">Nada encontrado.</div>
+</section>
+<script>
+function filtrarHistorico(q){
+  q = q.trim().toLowerCase(); let algum = false;
+  document.querySelectorAll('.hist .cli').forEach(c => {
+    let doCliente = false;
+    c.querySelectorAll('.mt').forEach(m => {
+      const ok = !q || m.dataset.busca.includes(q) || c.querySelector('.nm').textContent.toLowerCase().includes(q);
+      m.style.display = ok ? '' : 'none'; doCliente = doCliente || ok;
+    });
+    c.style.display = doCliente ? '' : 'none';
+    if (q && doCliente) c.open = true;
+    algum = algum || doCliente;
+  });
+  document.getElementById('hist-vazio').style.display = algum ? 'none' : '';
+}
+</script>
