@@ -7,6 +7,7 @@ Uso:
 """
 
 import json
+import re
 from urllib.parse import urlencode
 from html import escape
 import socket
@@ -15,7 +16,7 @@ import sys
 import threading
 import traceback
 import webbrowser
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, flash, redirect, render_template_string, request, url_for
@@ -27,6 +28,7 @@ import config
 import db
 import google_services as g
 import gravador
+import lembretes
 import monitor
 import sincronia
 
@@ -369,7 +371,7 @@ details>summary{cursor:pointer;list-style:none}
 <header class="top"><div class="in">
 <a class="logo" href="{{ url_for('inicio') }}"><i>R</i>Reuniões</a>
 <nav class="menu">
-<a href="{{ url_for('inicio') }}" class="{{ 'on' if not request.path.startswith('/tarefas') }}">Reuniões</a>
+<a href="{{ url_for('inicio') }}" class="{{ 'on' if not request.path.startswith('/tarefas') }}">Painel</a>
 <a href="{{ url_for('tarefas') }}" class="{{ 'on' if request.path.startswith('/tarefas') }}">Tarefas</a>
 </nav>
 {% if sinc_ligada %}<form method="post" action="{{ url_for('sincronizar_agora') }}" class="sinc" title="{{ sinc.erro or sinc.resumo or 'Sincroniza atas, tarefas e gravações com o seu Google Drive' }}">
@@ -400,58 +402,72 @@ def sincronizar_agora():
     return redirect(request.referrer or url_for("inicio"))
 
 
+DIAS_SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro",
+         "outubro", "novembro", "dezembro"]
+TELA_PAINEL = config.BASE_DIR / "telas" / "painel.html"
+
+
 @app.route("/")
 def inicio():
+    """Tela única: agenda da semana, tarefas, reuniões recentes e alertas."""
+    semana = request.args.get("semana", 0, type=int)
+    agora = datetime.now().astimezone()
+    hoje = agora.date()
+    segunda = hoje - timedelta(days=hoje.weekday()) + timedelta(weeks=semana)
+    ini_semana = datetime.combine(segunda, datetime.min.time(), agora.tzinfo)
     try:
-        reunioes = g.listar_reunioes()
+        eventos = g.listar_eventos(ini_semana, ini_semana + timedelta(days=7))
+        recentes = [r for r in g.listar_reunioes(dias_atras=14, dias_frente=0) if r["ja_terminou"]][::-1]
+        # compromissos de hoje: vêm da própria semana exibida; em outra semana, busca só o dia de hoje
+        eventos_de_hoje = eventos if semana == 0 else g.listar_eventos(
+            datetime.combine(hoje, datetime.min.time(), agora.tzinfo), datetime.combine(hoje + timedelta(days=1), datetime.min.time(), agora.tzinfo))
     except Exception as e:
         return pagina(
             "<h1>Conecte sua conta Google</h1><p>{{ erro }}</p>"
             "<p>Rode <code>python reunioes.py login</code> no terminal e recarregue esta página.</p>",
             erro=str(e),
         )
-    feitas = atas.existentes()
-    passadas = [r for r in reunioes if r["ja_terminou"]][::-1]
-    futuras = [r for r in reunioes if not r["ja_terminou"]]
+
+    minhas = db.tarefas(somente_minhas=True)
+    clientes_por_id = {c["id"]: c["nome"] for c in db.clientes()}
+    dias = []
+    for i in range(7):
+        d = segunda + timedelta(days=i)
+        do_dia = []
+        for e in eventos:
+            if e["dia_inteiro"]:
+                if date.fromisoformat(e["inicio"]) <= d < date.fromisoformat(e["fim"]):
+                    do_dia.append({**e, "hora": "Dia todo", "hora_fim": "", "agora": False})
+                continue
+            ini_e = datetime.fromisoformat(e["inicio"]).astimezone()
+            fim_e = datetime.fromisoformat(e["fim"]).astimezone()
+            if ini_e.date() == d:
+                cliente = clientes_por_id.get(sugerir_cliente(e)) if e["link"] else None
+                do_dia.append({**e, "hora": ini_e.strftime("%H:%M"), "hora_fim": fim_e.strftime("%H:%M"),
+                               "agora": ini_e <= agora <= fim_e, "cliente": cliente})
+        dias.append({"data": d, "semana": DIAS_SEMANA[i], "hoje": d == hoje, "passado": d < hoje, "eventos": do_dia,
+                     "tarefas": [t for t in minhas if t["prazo"] == d.isoformat()]})
+
+    eventos_hoje = sum(
+        1 for e in eventos_de_hoje
+        if (date.fromisoformat(e["inicio"]) <= hoje < date.fromisoformat(e["fim"]) if e["dia_inteiro"]
+            else datetime.fromisoformat(e["inicio"]).astimezone().date() == hoje)
+    )
+    domingo = segunda + timedelta(days=6)
+    semana_txt = (f"{segunda.day} a {domingo.day} de {MESES[domingo.month - 1]}" if segunda.month == domingo.month
+                  else f"{segunda.day} de {MESES[segunda.month - 1]} a {domingo.day} de {MESES[domingo.month - 1]}")
+    saudacao = "Bom dia" if agora.hour < 12 else ("Boa tarde" if agora.hour < 18 else "Boa noite")
+    if config.SEU_NOME and config.SEU_NOME != "Eu":
+        saudacao += f", {config.SEU_NOME}"
     return pagina(
-        """<h1>Minhas reuniões do Meet</h1>
-<p class="mut">Últimos 7 dias e próximos 7 dias da sua agenda.</p>
-{% if minhas %}<div class="card row"><div><b>{{ minhas|length }} tarefas suas em aberto</b>
-{% set atr = minhas|selectattr('atrasada')|list|length %}{% if atr %} · <b style="color:#d93025">{{ atr }} atrasadas</b>{% endif %}</div>
-<a class="btn" href="{{ url_for('tarefas') }}">Ver tarefas</a></div>{% endif %}
-{% if gravando or tarefa.ativa %}<div class="card row" style="border-color:#d93025"><div>
-<b style="color:#d93025">{% if gravando %}● Gravando{% else %}⏳ Processando gravação{% endif %}</b></div>
-<a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
-<h2>Já aconteceram</h2>
-{% for r in passadas %}<div class="card row"><div><b>{{ r.titulo }}</b><br>
-<span class="mut">{{ r.inicio[:16].replace('T',' ') }} · {{ r.participantes|length }} convidados</span></div><div>
-{% if r.id in feitas %}<span class="ok">✓ Ata pronta</span> <a class="btn sec" href="{{ url_for('ver_ata', event_id=r.id) }}">Ver ata</a>
-{% else %}<form class="inline" method="post" action="{{ url_for('gerar', event_id=r.id) }}" data-espera="Gerando ata…">
-<button>Gerar ata</button></form>
-<a class="btn sec" href="{{ url_for('manual', event_id=r.id) }}">Colar transcrição</a>{% endif %}
-</div></div>{% else %}<p class="mut">Nenhuma reunião do Meet nos últimos 7 dias.</p>{% endfor %}
-<h2>Próximas</h2>
-{% for r in futuras %}<div class="card row"><div><b>{{ r.titulo }}</b><br>
-<span class="mut">{{ r.inicio[:16].replace('T',' ') }}</span></div>
-<div>{% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id=r.id) }}"
-onsubmit="window.open('{{ r.link }}','_blank')"><button>● Entrar e gravar</button></form>{% endif %}
-<a class="btn sec" href="{{ r.link }}" target="_blank">Só entrar</a></div></div>
-{% else %}<p class="mut">Nada agendado.</p>{% endfor %}
-{% if pendentes %}<h2>Gravações aguardando decisão</h2>
-{% for p in pendentes %}<div class="card row"><div><b>{{ p.reuniao.titulo }}</b><br>
-<span class="mut">{{ p.encerrada_em.replace('T',' ') }} · {{ p.minutos }} min</span></div>
-<a class="btn" href="{{ url_for('pendente', pid=p.pid) }}">Gerar ata?</a></div>{% endfor %}{% endif %}
-<h2>Reunião fora da agenda</h2>
-<p>{% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id='avulsa') }}">
-<button class="sec">● Gravar agora</button></form> ·{% endif %}
-<a href="{{ url_for('manual', event_id='avulsa') }}">Colar uma transcrição avulsa</a></p>""",
-        passadas=passadas,
-        futuras=futuras,
-        feitas=feitas,
-        gravando=GRAVADOR.ativo,
-        tarefa=TAREFA,
-        pendentes=listar_pendentes(),
-        minhas=db.tarefas(somente_minhas=True),
+        TELA_PAINEL.read_text(encoding="utf-8"),
+        saudacao=saudacao,
+        hoje_txt=f"{DIAS_SEMANA[hoje.weekday()]}, {hoje.day} de {MESES[hoje.month - 1]}",
+        semana=semana, semana_txt=semana_txt, dias=dias, eventos_hoje=eventos_hoje,
+        minhas=minhas, recentes=recentes, feitas=atas.existentes(), pendentes=listar_pendentes(),
+        gravando=GRAVADOR.ativo, titulo_gravacao=(GRAVADOR.reuniao or {}).get("titulo", ""), tarefa=TAREFA,
+        seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME,
     )
 
 
@@ -727,6 +743,75 @@ def followup(event_id):
     return redirect(url_for("ver_ata", event_id=event_id))
 
 
+# ---------------------------------------------------------------- Resumo pré-reunião
+
+def ultima_ata_do_cliente(cliente_id) -> dict | None:
+    candidatas = []
+    for event_id in atas.existentes():
+        reg = atas.carregar(event_id) or {}
+        if cliente_id and reg.get("cliente_id") == cliente_id and reg.get("ata"):
+            candidatas.append((reg["reuniao"].get("inicio", ""), event_id, reg))
+    if not candidatas:
+        return None
+    _, event_id, reg = max(candidatas, key=lambda c: c[0])
+    return {"event_id": event_id, **reg}
+
+
+@app.route("/resumo/<event_id>")
+def resumo(event_id):
+    r = g.obter_reuniao(event_id)
+    if not r:
+        flash("Reunião não encontrada na agenda.")
+        return redirect(url_for("inicio"))
+    cliente_id = request.args.get("cliente", type=int) or sugerir_cliente(r)
+    cli = db.cliente(cliente_id)
+    res = lembretes.resumo_cliente(cliente_id)
+    anterior = ultima_ata_do_cliente(cliente_id)
+    inicio = datetime.fromisoformat(r["inicio"]) if "T" in r["inicio"] else None
+    faltam = round((inicio - datetime.now().astimezone()).total_seconds() / 60) if inicio else None
+    pauta = re.sub(r"<[^>]+>", " ", (r.get("descricao") or "").replace("<br>", "\n")).strip()
+    return pagina(
+        """<style>
+.rs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media (max-width:760px){.rs-grid{grid-template-columns:1fr}}
+.rs h3{margin:0 0 10px;font-size:14px;font-weight:600;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.rs ul{margin:0;padding-left:18px}.rs li{margin:4px 0}
+.atr{color:var(--err);font-weight:600}.qd{color:var(--mut);font-size:12.5px}
+</style>
+<div class="row"><div><h1>{{ r.titulo }}</h1>
+<p class="mut">{% if inicio %}{{ inicio.strftime('%d/%m às %H:%M') }}{% if faltam is not none and faltam >= 0 %} · começa em {{ faltam }} min{% endif %}{% endif %}
+{% if r.participantes %} · {{ r.participantes|map(attribute='email')|join(', ') }}{% endif %}</p></div>
+<a class="btn" href="{{ r.link }}" target="_blank">Entrar no Meet</a></div>
+
+<form method="get" class="row" style="justify-content:flex-start;margin:6px 0 4px">
+<span class="mut">Cliente:</span><select name="cliente" onchange="this.form.submit()" style="width:auto">
+<option value="">— nenhum —</option>{% for c in clientes %}<option value="{{ c.id }}" {{ 'selected' if cli and c.id == cli.id }}>{{ c.nome }}</option>{% endfor %}</select>
+{% if not cli %}<span class="mut">Escolha o cliente para ver as pendências e a última reunião.</span>{% endif %}</form>
+
+<div class="rs-grid">
+<div class="card rs"><h3>Suas pendências{% if cli %} com {{ cli.nome }}{% endif %}</h3>
+{% if res.minhas %}<ul>{% for t in res.minhas %}<li>{{ t.descricao }}
+<span class="{{ 'atr' if t.atrasada else 'qd' }}">{% if t.prazo %}· {{ 'atrasada desde' if t.atrasada else 'até' }} {{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% endif %}{% if t.status == 'fazendo' %} · em andamento{% endif %}</span></li>{% endfor %}</ul>
+{% else %}<p class="mut">Nada pendente do seu lado.</p>{% endif %}</div>
+
+<div class="card rs"><h3>Para cobrar do cliente</h3>
+{% if res.do_cliente %}<ul>{% for t in res.do_cliente %}<li>{{ t.descricao }} <span class="qd">· {{ t.responsavel }}{% if t.prazo %} · até {{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% endif %}</span></li>{% endfor %}</ul>
+{% else %}<p class="mut">Nada pendente do lado do cliente.</p>{% endif %}</div>
+
+<div class="card rs"><h3>Última reunião</h3>
+{% if anterior %}<p><b>{{ anterior.ata.titulo }}</b> <span class="qd">· {{ anterior.reuniao.inicio[8:10] }}/{{ anterior.reuniao.inicio[5:7] }}</span></p>
+<p>{{ anterior.ata.resumo }}</p>
+{% if anterior.ata.decisoes %}<p class="mut" style="margin-bottom:4px">Decisões:</p><ul>{% for d in anterior.ata.decisoes %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+{% if anterior.ata.proxima_reuniao.pauta %}<p class="mut" style="margin:10px 0 4px">Ficou para esta reunião:</p><ul>{% for p in anterior.ata.proxima_reuniao.pauta %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+<p><a href="{{ url_for('ver_ata', event_id=anterior.event_id) }}">Ver a ata completa</a></p>
+{% else %}<p class="mut">Nenhuma ata anterior{% if cli %} com {{ cli.nome }}{% endif %}.</p>{% endif %}</div>
+
+<div class="card rs"><h3>Pauta do convite</h3>
+{% if pauta %}<p style="white-space:pre-wrap">{{ pauta }}</p>{% else %}<p class="mut">O convite não tem descrição.</p>{% endif %}</div>
+</div>""",
+        r=r, cli=cli, res=res, anterior=anterior, inicio=inicio, faltam=faltam, pauta=pauta, clientes=db.clientes(),
+    )
+
+
 # ---------------------------------------------------------------- Clientes e tarefas
 
 def seletor_cliente(atual=None, nome="cliente_id") -> str:
@@ -975,6 +1060,8 @@ if __name__ == "__main__":
             monitor.iniciar(ao_detectar_meet, ao_encerrar_meet, lambda: GRAVADOR.ativo and GRAVADOR.automatica)
             print("[monitor] vigiando chamadas do Meet")
         sincronia.iniciar_automatico()
+        if config.LEMBRETES:
+            lembretes.iniciar(sugerir_cliente)
         # Deixa os modelos de voz prontos antes da primeira reunião
         threading.Thread(target=lambda: [gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO),
                                          gravador.carregar_modelo()], daemon=True).start()

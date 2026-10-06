@@ -58,50 +58,68 @@ def autenticar() -> str:
 
 # ---------------------------------------------------------------- Agenda
 
-def listar_reunioes(dias_atras: int = 7, dias_frente: int = 7) -> list[dict]:
-    """Eventos da agenda principal que têm link do Google Meet."""
+def _eventos(inicio: datetime, fim: datetime) -> list[dict]:
+    """Todos os eventos da agenda principal no período (com e sem Meet)."""
     agora = datetime.now(timezone.utc)
-    resp = (
-        _svc("calendar", "v3")
-        .events()
-        .list(
-            calendarId="primary",
-            timeMin=(agora - timedelta(days=dias_atras)).isoformat(),
-            timeMax=(agora + timedelta(days=dias_frente)).isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
-            maxResults=250,
+    itens, token = [], None
+    while True:
+        resp = (
+            _svc("calendar", "v3")
+            .events()
+            .list(calendarId="primary", timeMin=inicio.isoformat(), timeMax=fim.isoformat(),
+                  singleEvents=True, orderBy="startTime", maxResults=250, pageToken=token)
+            .execute()
         )
-        .execute()
-    )
-    reunioes = []
-    for ev in resp.get("items", []):
-        if not ev.get("hangoutLink"):
+        itens += resp.get("items", [])
+        token = resp.get("nextPageToken")
+        if not token:
+            break
+    eventos = []
+    for ev in itens:
+        if ev.get("status") == "cancelled":
             continue
-        inicio = ev["start"].get("dateTime") or ev["start"].get("date")
-        fim = ev["end"].get("dateTime") or ev["end"].get("date")
-        reunioes.append(
+        eu = next((a for a in ev.get("attendees", []) if a.get("self")), {})
+        if eu.get("responseStatus") == "declined":
+            continue
+        inicio_ev = ev["start"].get("dateTime") or ev["start"].get("date")
+        fim_ev = ev["end"].get("dateTime") or ev["end"].get("date")
+        link = ev.get("hangoutLink")
+        eventos.append(
             {
                 "id": ev["id"],
                 "titulo": ev.get("summary", "(sem título)"),
                 "descricao": ev.get("description", ""),
-                "inicio": inicio,
-                "fim": fim,
-                "link": ev["hangoutLink"],
-                "codigo_meet": (ev.get("conferenceData") or {}).get("conferenceId")
-                or ev["hangoutLink"].rstrip("/").split("/")[-1],
+                "local": ev.get("location", ""),
+                "inicio": inicio_ev,
+                "fim": fim_ev,
+                "dia_inteiro": "T" not in inicio_ev,
+                "link": link,
+                "link_agenda": ev.get("htmlLink"),
+                "codigo_meet": ((ev.get("conferenceData") or {}).get("conferenceId")
+                                or (link.rstrip("/").split("/")[-1] if link else None)),
                 "participantes": [
                     {"email": a["email"], "nome": a.get("displayName", ""), "resposta": a.get("responseStatus", "")}
                     for a in ev.get("attendees", [])
                     if not a.get("resource")
                 ],
                 "anexos": ev.get("attachments", []),
-                "ja_terminou": datetime.fromisoformat(fim.replace("Z", "+00:00")).astimezone(timezone.utc) < agora
-                if "T" in fim
+                "ja_terminou": datetime.fromisoformat(fim_ev.replace("Z", "+00:00")).astimezone(timezone.utc) < agora
+                if "T" in fim_ev
                 else False,
             }
         )
-    return reunioes
+    return eventos
+
+
+def listar_eventos(inicio: datetime, fim: datetime) -> list[dict]:
+    """Agenda completa do período, para a tela de agenda."""
+    return _eventos(inicio, fim)
+
+
+def listar_reunioes(dias_atras: int = 7, dias_frente: int = 7) -> list[dict]:
+    """Eventos da agenda principal que têm link do Google Meet."""
+    agora = datetime.now(timezone.utc)
+    return [e for e in _eventos(agora - timedelta(days=dias_atras), agora + timedelta(days=dias_frente)) if e["link"]]
 
 
 def obter_reuniao(event_id: str) -> dict | None:

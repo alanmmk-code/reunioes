@@ -1,0 +1,150 @@
+<style>
+.pn-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.pn-head p{margin:0;color:var(--mut)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+@media (max-width:720px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh);text-decoration:none;color:var(--tx)}
+.stat b{display:block;font-size:26px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat span{color:var(--mut);font-size:13px;font-weight:500}
+.stat.err b{color:var(--err)}.stat.warn b{color:var(--warn)}.stat.pri b{color:var(--pri)}
+a.stat:hover{border-color:var(--pri)}
+.alerta{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-radius:var(--r);padding:12px 16px;margin-bottom:10px;border:1px solid}
+.alerta.rec{background:var(--err-s);border-color:var(--err);color:var(--err)}
+.alerta.pend{background:var(--warn-s);border-color:var(--warn);color:var(--warn)}
+.alerta b{font-weight:600}
+.cols{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:1fr}}
+.box{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
+.box-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bd)}
+.box-h h2{margin:0;font-size:15px}
+.box-h .nav{display:flex;gap:4px;align-items:center}
+.box-h .nav a{padding:4px 10px;border-radius:7px;color:var(--mut);text-decoration:none;font-size:13px;border:1px solid var(--bd)}
+.box-h .nav a:hover{color:var(--tx);background:var(--card2)}
+.dia{display:grid;grid-template-columns:64px 1fr;border-bottom:1px solid var(--bd)}
+.dia:last-child{border-bottom:0}
+.dia.passado{opacity:.6}
+.dia-n{padding:12px 0 12px 16px;color:var(--mut)}
+.dia-n b{display:block;font-size:20px;color:var(--tx);line-height:1.1}
+.dia-n small{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.dia.hoje .dia-n b,.dia.hoje .dia-n small{color:var(--pri)}
+.dia.hoje{background:linear-gradient(90deg,var(--pri-s),transparent 40%)}
+.dia-c{padding:8px 16px 8px 0;display:flex;flex-direction:column;gap:6px;min-height:44px;justify-content:center}
+.ev{display:grid;grid-template-columns:86px 1fr auto;gap:10px;align-items:center;padding:6px 10px;border-radius:9px;background:var(--card2);border:1px solid var(--bd)}
+.ev.meet{border-left:3px solid var(--pri)}
+.ev.agora{border-color:var(--err);box-shadow:0 0 0 1px var(--err)}
+.ev .h{font-size:12.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+.ev .t{font-weight:500;overflow:hidden;text-overflow:ellipsis}
+.ev .t small{display:block;color:var(--mut);font-weight:400;font-size:12px}
+.ev .ac{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.ev .ac .btn,.ev .ac button{padding:3px 9px;font-size:12px}
+@media (max-width:600px){.ev{grid-template-columns:1fr}.ev .ac{justify-content:flex-start}}
+.tag{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.tag.ok{background:var(--ok-s);color:var(--ok)}.tag.agora{background:var(--err);color:#fff}
+.tdia{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tx2);padding:2px 10px}
+.tdia::before{content:"";width:8px;height:8px;border-radius:50%;border:2px solid var(--warn);flex:none}
+.vazio-dia{color:var(--mut);font-size:13px}
+.tk{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--bd)}
+.tk:last-child{border-bottom:0}
+.tk .d{font-size:13.5px;font-weight:500}
+.tk .m{font-size:12px;color:var(--mut)}
+.chk{appearance:none;-webkit-appearance:none;width:19px;height:19px;border:2px solid var(--bd);border-radius:50%;cursor:pointer;margin:0;padding:0;display:grid;place-items:center;background:var(--card)}
+.chk:hover{border-color:var(--ok)}
+.chk:checked{background:var(--ok);border-color:var(--ok)}
+.chk:checked::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.due{font-size:12px;font-weight:600;padding:3px 8px;border-radius:7px;background:var(--card2);color:var(--tx2);white-space:nowrap}
+.due.atr{background:var(--err-s);color:var(--err)}.due.hj{background:var(--warn-s);color:var(--warn)}
+.rapida{padding:12px 16px;border-top:1px solid var(--bd);display:grid;grid-template-columns:1fr 140px;gap:8px}
+.rapida .l2{grid-column:1/-1;display:flex;gap:8px}
+.rapida select{width:auto;flex:1}
+.lista-r .r{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 16px;border-bottom:1px solid var(--bd);flex-wrap:wrap}
+.lista-r .r:last-child{border-bottom:0}
+.lista-r .r .btn,.lista-r .r button{padding:4px 10px;font-size:12.5px}
+.rodape{padding:12px 16px;border-top:1px solid var(--bd);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+</style>
+
+<div class="pn-head"><div><h1>{{ saudacao }}</h1><p>{{ hoje_txt }}</p></div></div>
+
+{% if gravando %}<div class="alerta rec"><b>● Gravando agora{% if titulo_gravacao %}: {{ titulo_gravacao }}{% endif %}</b>
+<a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></div>
+{% elif tarefa.ativa %}<div class="alerta pend"><b>⏳ Gerando ata: {{ tarefa.etapa }}{% if tarefa.etapa.startswith('Transcrevendo') %} ({{ tarefa.pct }}%){% endif %}</b>
+<a class="btn sec" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
+{% for p in pendentes %}<div class="alerta pend"><b>Gravação aguardando decisão: {{ p.reuniao.titulo }} · {{ p.minutos }} min</b>
+<a class="btn" href="{{ url_for('pendente', pid=p.pid) }}">Gerar ata?</a></div>{% endfor %}
+
+<div class="stats">
+<a class="stat err" href="{{ url_for('tarefas') }}"><b>{{ minhas|selectattr('atrasada')|list|length }}</b><span>Tarefas atrasadas</span></a>
+<a class="stat warn" href="{{ url_for('tarefas') }}"><b>{{ minhas|selectattr('hoje')|list|length }}</b><span>Vencem hoje</span></a>
+<div class="stat pri"><b>{{ eventos_hoje }}</b><span>Compromissos hoje</span></div>
+<a class="stat" href="{{ url_for('tarefas') }}"><b>{{ minhas|length }}</b><span>Tarefas em aberto</span></a>
+</div>
+
+<div class="cols">
+<!-- ===================== AGENDA ===================== -->
+<section class="box">
+<div class="box-h"><h2>Agenda · {{ semana_txt }}</h2>
+<div class="nav"><a href="{{ url_for('inicio', semana=semana-1) }}" title="Semana anterior">‹</a>
+{% if semana != 0 %}<a href="{{ url_for('inicio') }}">Hoje</a>{% endif %}
+<a href="{{ url_for('inicio', semana=semana+1) }}" title="Próxima semana">›</a></div></div>
+{% for d in dias %}
+<div class="dia {{ 'hoje' if d.hoje }} {{ 'passado' if d.passado }}">
+<div class="dia-n"><small>{{ d.semana }}</small><b>{{ d.data.day }}</b></div>
+<div class="dia-c">
+{% for e in d.eventos %}
+<div class="ev {{ 'meet' if e.link }} {{ 'agora' if e.agora }}">
+<span class="h">{{ e.hora }}{% if e.hora_fim %}–{{ e.hora_fim }}{% endif %}</span>
+<span class="t">{{ e.titulo }}{% if e.cliente %} <small>{{ e.cliente }}</small>{% elif e.local %} <small>{{ e.local }}</small>{% endif %}</span>
+<span class="ac">
+{% if e.agora %}<span class="tag agora">agora</span>{% endif %}
+{% if e.link %}
+  {% if e.ja_terminou %}
+    {% if e.id in feitas %}<a class="btn sec" href="{{ url_for('ver_ata', event_id=e.id) }}">Ver ata</a>
+    {% else %}<form class="inline" method="post" action="{{ url_for('gerar', event_id=e.id) }}" data-espera="Gerando…"><button class="sec">Gerar ata</button></form>{% endif %}
+  {% else %}
+    <a class="btn sec" href="{{ url_for('resumo', event_id=e.id) }}">Resumo</a>
+    {% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id=e.id) }}" onsubmit="window.open('{{ e.link }}','_blank')"><button>Entrar e gravar</button></form>
+    {% else %}<a class="btn" href="{{ e.link }}" target="_blank">Entrar</a>{% endif %}
+  {% endif %}
+{% elif e.link_agenda %}<a class="btn sec" href="{{ e.link_agenda }}" target="_blank" title="Abrir no Google Agenda">↗</a>{% endif %}
+</span></div>
+{% endfor %}
+{% for t in d.tarefas %}<div class="tdia" title="Prazo de tarefa">{{ t.descricao }}{% if t.cliente %} · <span class="mut">{{ t.cliente }}</span>{% endif %}</div>{% endfor %}
+{% if not d.eventos and not d.tarefas %}<span class="vazio-dia">Livre</span>{% endif %}
+</div></div>
+{% endfor %}
+<div class="rodape"><a class="btn sec" href="https://calendar.google.com" target="_blank">Abrir o Google Agenda</a>
+{% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id='avulsa') }}"><button class="sec">● Gravar reunião fora da agenda</button></form>{% endif %}
+<a class="mut" href="{{ url_for('manual', event_id='avulsa') }}">Colar uma transcrição</a></div>
+</section>
+
+<!-- ===================== TAREFAS + REUNIÕES ===================== -->
+<div style="display:flex;flex-direction:column;gap:18px">
+<section class="box">
+<div class="box-h"><h2>Minhas tarefas</h2><a class="mut" href="{{ url_for('tarefas') }}">Ver todas →</a></div>
+{% for t in minhas[:12] %}
+<div class="tk">
+<form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}"><input type="hidden" name="status" value="feito">
+<input type="checkbox" class="chk" onchange="this.form.submit()" title="Concluir"></form>
+<div><div class="d">{{ t.descricao }}</div><div class="m">{{ t.cliente or 'Sem cliente' }}{% if t.status == 'fazendo' %} · em andamento{% endif %}</div></div>
+{% if t.prazo %}{% set dd = t.dias %}<span class="due {{ 'atr' if t.atrasada else ('hj' if dd == 0 else '') }}">
+{% if dd < -1 %}{{ -dd }} dias atrasada{% elif dd == -1 %}Ontem{% elif dd == 0 %}Hoje{% elif dd == 1 %}Amanhã{% elif dd <= 6 %}Em {{ dd }} dias{% else %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% endif %}</span>
+{% else %}<span></span>{% endif %}
+</div>
+{% else %}<div class="tk"><span></span><div class="mut">Nada pendente. As ações das reuniões aparecem aqui.</div><span></span></div>{% endfor %}
+{% if minhas|length > 12 %}<div class="tk"><span></span><a class="mut" href="{{ url_for('tarefas') }}">+ {{ minhas|length - 12 }} tarefas</a><span></span></div>{% endif %}
+<form method="post" action="{{ url_for('tarefa_nova') }}" class="rapida">
+<input name="descricao" placeholder="Nova tarefa…" required>
+<input type="date" name="prazo">
+<div class="l2">{{ seletor_cliente()|safe }}<input type="hidden" name="minha" value="1"><input type="hidden" name="responsavel" value="{{ seu_nome }}"><button>Adicionar</button></div>
+</form>
+</section>
+
+<section class="box lista-r">
+<div class="box-h"><h2>Reuniões recentes</h2></div>
+{% for r in recentes[:6] %}<div class="r"><div><b style="font-weight:500">{{ r.titulo }}</b><br><span class="mut">{{ r.inicio[8:10] }}/{{ r.inicio[5:7] }} {{ r.inicio[11:16] }}</span></div>
+<div>{% if r.id in feitas %}<span class="tag ok">Ata pronta</span> <a class="btn sec" href="{{ url_for('ver_ata', event_id=r.id) }}">Ver</a>
+{% else %}<form class="inline" method="post" action="{{ url_for('gerar', event_id=r.id) }}" data-espera="Gerando…"><button>Gerar ata</button></form>
+<a class="btn sec" href="{{ url_for('manual', event_id=r.id) }}">Colar</a>{% endif %}</div></div>
+{% else %}<div class="r mut">Nenhuma reunião do Meet nas últimas 2 semanas.</div>{% endfor %}
+</section>
+</div>
+</div>

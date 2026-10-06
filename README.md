@@ -80,6 +80,29 @@ e começa a gravar) ou **● Gravar agora** para uma reunião fora da agenda. Ao
   e mais lentos.
 - Os áudios e transcrições ficam em `gravacoes/`. Apague os antigos quando quiser liberar espaço.
 
+### Painel: tudo numa tela só
+
+A página inicial do painel (http://localhost:5055) reúne tudo:
+
+- **Resumo do dia**: tarefas atrasadas, que vencem hoje, compromissos de hoje e tarefas em aberto.
+- **Alertas**: gravação em andamento, ata sendo gerada, gravações aguardando "Gerar ata?".
+- **Agenda da semana** (todos os compromissos do Google Agenda, com ou sem Meet), dia a dia, com as setas
+  para outras semanas. Nas reuniões do Meet: **Resumo**, **Entrar e gravar**, **Ver ata** ou **Gerar ata**.
+  Os prazos das suas tarefas aparecem no dia em que vencem.
+- **Minhas tarefas**: concluir com um clique e adicionar tarefa rápida.
+- **Reuniões recentes** e o status das atas.
+
+A aba **Tarefas** continua para a gestão completa (filtros, tarefas do cliente, clientes).
+
+### Lembretes
+
+- **Resumo pré-reunião**: 10 minutos antes de cada reunião do Meet, uma notificação com o que está pendente
+  com o cliente; clicando, abre o resumo (suas pendências, o que cobrar do cliente, o que foi decidido na
+  última reunião e a pauta do convite). Também pelo botão **Resumo** na agenda.
+- **Aviso diário** (08:30, ou ao ligar o PC se for mais tarde): quantas tarefas vencem hoje e quantas estão
+  atrasadas; clicando, abre a lista. Só avisa se houver algo para hoje ou atrasado.
+- Ajuste em `AVISO_DIARIO_HORA` e `BRIEFING_MINUTOS_ANTES` no `.env`. Os lembretes não usam o Claude.
+
 ### Durante a reunião: cliente e sugestões de resposta
 
 Quando uma chamada do Meet começa, a gravação inicia sozinha e abre uma **janelinha no canto da tela**:

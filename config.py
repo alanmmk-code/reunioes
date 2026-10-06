@@ -47,6 +47,11 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/meetings.space.readonly",  # transcrições via API do Meet
 ]
 
+# Lembretes: aviso diário das tarefas (HH:MM) e resumo antes de cada reunião
+AVISO_DIARIO_HORA = os.getenv("AVISO_DIARIO_HORA", "08:30")
+BRIEFING_MINUTOS_ANTES = int(os.getenv("BRIEFING_MINUTOS_ANTES", "10"))
+LEMBRETES = os.getenv("LEMBRETES", "sim").lower() in ("sim", "s", "true", "1")
+
 # Sincronização dos dados entre PCs pelo Google Drive
 SINCRONIZAR = os.getenv("SINCRONIZAR", "sim").lower() in ("sim", "s", "true", "1")
 # Enviar também os áudios (grandes: ~230 MB por hora de reunião). Sem isso, só textos e atas vão para o Drive.

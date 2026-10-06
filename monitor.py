@@ -83,14 +83,16 @@ def info_da_janela(titulo: str) -> tuple[str | None, str]:
     return (codigo.group(0) if codigo else None), nome
 
 
-def notificar(titulo: str, mensagem: str) -> None:
+def notificar(titulo: str, mensagem: str, url: str | None = None) -> None:
     """Notificação do Windows (canto da tela), sem abrir janela."""
     titulo, mensagem = (s.replace("'", "’").replace("<", "").replace("&", "e") for s in (titulo, mensagem))
+    # Com url, clicar na notificação abre a página no navegador
+    abrir = (f' activationType="protocol" launch="{url.replace("&", "&amp;")}"' if url else "")
     script = (
         "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;"
         "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType=WindowsRuntime] | Out-Null;"
         "$x = New-Object Windows.Data.Xml.Dom.XmlDocument;"
-        f"$x.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>{titulo}</text><text>{mensagem}</text></binding></visual></toast>');"
+        f"$x.LoadXml('<toast{abrir}><visual><binding template=\"ToastGeneric\"><text>{titulo}</text><text>{mensagem}</text></binding></visual></toast>');"
         "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
         "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($x))"
     )
