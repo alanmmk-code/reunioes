@@ -98,6 +98,21 @@ A página inicial do painel (http://localhost:5055) reúne tudo:
 
 A aba **Tarefas** continua para a gestão completa (filtros, tarefas do cliente, clientes).
 
+### Clientes, cobrança, perguntas e semana
+
+- **Clientes que precisam de atenção** (no Painel e na aba **Clientes**): tarefas suas atrasadas, pendências
+  do cliente vencidas e clientes sem reunião há 30 dias ou mais.
+- **Ficha do cliente**: suas tarefas, pendências do cliente, próximas reuniões, contatos (tirados dos
+  participantes das reuniões), histórico de atas e **anotações** (ligações, WhatsApp — sincronizadas entre PCs).
+- **Cobrar pendências**: monta um e-mail com o que ficou do lado do cliente; você revisa e envia pelo Gmail.
+  O envio fica registrado nas anotações.
+- **Pergunte sobre suas reuniões**: o Claude responde lendo as atas e mostra de qual reunião tirou a resposta
+  (usa um pouco da cota do plano por pergunta).
+- **Nova reunião**: cria o evento com Meet no Google Agenda, com os contatos e as pendências do cliente na pauta.
+- **Semana**: o que foi decidido, o que você concluiu, próxima semana, atrasadas e números do mês. Notificação
+  toda sexta às 16:00 (`AVISO_SEMANAL_HORA`).
+- **Status do sistema** no rodapé do Painel: Google, Claude, Drive e detector do Meet.
+
 ### Lembretes
 
 - **Resumo pré-reunião**: 10 minutos antes de cada reunião do Meet, uma notificação com o que está pendente

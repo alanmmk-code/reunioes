@@ -1,0 +1,17 @@
+<h1>Pergunte sobre suas reuniões</h1>
+<p class="mut">O Claude responde lendo as suas atas{% if cliente %} com <b>{{ cliente.nome }}</b>{% endif %} e mostra de qual reunião tirou a resposta.</p>
+<form method="post" class="pergunta" data-espera="Consultando as atas…">
+<select name="cliente_id" style="width:auto"><option value="">Todos os clientes</option>
+{% for c in clientes %}<option value="{{ c.id }}" {{ 'selected' if cliente and c.id == cliente.id }}>{{ c.nome }}</option>{% endfor %}</select>
+<input name="pergunta" value="{{ pergunta }}" placeholder="Ex.: qual prazo de entrega combinamos com a Ivone?" required autofocus>
+<button>Perguntar</button></form>
+
+{% if resposta %}
+<div class="card resp {{ '' if resposta.encontrou else 'nao' }}">
+<div class="mut" style="margin-bottom:6px">{{ pergunta }}</div>
+<p style="font-size:16px;margin:0 0 10px;white-space:pre-wrap">{{ resposta.resposta }}</p>
+{% if resposta.fontes %}<div class="mut">Fonte{{ 's' if resposta.fontes|length > 1 }}:
+{% for f in resposta.fontes %}<a class="pill" href="{{ url_for('ver_ata', event_id=f.event_id) }}">{{ f.titulo }} · {{ f.data[8:10] }}/{{ f.data[5:7] }}</a> {% endfor %}</div>{% endif %}
+</div>
+{% endif %}
+<p class="mut" style="margin-top:18px">Exemplos: "o que ficou pendente com a Alfa?", "quando é a entrega da Ivone?", "quais decisões tomamos em outubro?". Cada pergunta usa um pouco da cota do seu plano do Claude.</p>

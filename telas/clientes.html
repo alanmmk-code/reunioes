@@ -1,0 +1,15 @@
+<div class="row" style="margin-bottom:16px"><div><h1>Clientes</h1>
+<p class="mut" style="margin:0">Quem precisa de atenção aparece primeiro.</p></div>
+<a class="btn" href="{{ url_for('nova_reuniao') }}">+ Nova reunião</a></div>
+
+<div class="cl-grid">
+{% for c in clientes %}
+<a class="cl-card nivel-{{ c.nivel or 'ok' }}" href="{{ url_for('ficha_cliente', cliente_id=c.id) }}">
+<div class="cl-top"><div class="av">{{ c.nome[:1]|upper }}</div>
+<div><b>{{ c.nome }}</b><div class="mut">{{ c.reunioes }} reuni{{ 'ões' if c.reunioes != 1 else 'ão' }}{% if c.ultima %} · última em {{ c.ultima[8:10] }}/{{ c.ultima[5:7] }}{% endif %}</div></div></div>
+{% if c.motivos %}<ul class="motivos">{% for nivel, txt in c.motivos %}<li class="m-{{ nivel }}">{{ txt }}</li>{% endfor %}</ul>
+{% else %}<p class="tudo-ok">✓ Tudo em dia</p>{% endif %}
+<div class="cl-num"><span><b>{{ c.minhas|length }}</b> suas</span><span><b>{{ c.dele|length }}</b> do cliente</span></div>
+</a>
+{% else %}<div class="card mut">Nenhum cliente ainda. Eles aparecem quando você escolhe o cliente de uma reunião, ou cadastre na aba Tarefas.</div>{% endfor %}
+</div>

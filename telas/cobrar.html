@@ -1,0 +1,10 @@
+<h1>Cobrar pendências · {{ c.nome }}</h1>
+<p class="mut">Revise o texto antes de enviar. O e-mail sai da sua conta do Gmail e fica registrado nas anotações do cliente.</p>
+<form method="post" class="card" data-espera="Enviando…" style="display:grid;gap:10px">
+<label class="mut">Para <input name="para" value="{{ r.para }}" placeholder="email@cliente.com, outro@cliente.com" required></label>
+<label class="mut">Assunto <input name="assunto" value="{{ r.assunto }}" required></label>
+<label class="mut">Mensagem <textarea name="corpo" rows="14" required>{{ r.corpo }}</textarea></label>
+{% if not r.para %}<p class="flash" style="margin:0">Não achei e-mails deste cliente nas reuniões. Digite o destinatário.</p>{% endif %}
+<div class="row" style="justify-content:flex-start;gap:8px"><button>Enviar e-mail</button>
+<a class="btn sec" href="{{ url_for('ficha_cliente', cliente_id=c.id) }}">Cancelar</a></div>
+</form>

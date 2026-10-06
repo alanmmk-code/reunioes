@@ -63,7 +63,12 @@ a.stat:hover{border-color:var(--pri)}
 .rodape{padding:12px 16px;border-top:1px solid var(--bd);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 </style>
 
-<div class="pn-head"><div><h1>{{ saudacao }}</h1><p>{{ hoje_txt }}</p></div></div>
+<div class="pn-head"><div><h1>{{ saudacao }}</h1><p>{{ hoje_txt }}</p></div>
+<div style="display:flex;gap:8px"><a class="btn" href="{{ url_for('nova_reuniao') }}">+ Nova reunião</a>
+<a class="btn sec" href="{{ url_for('semana') }}">Resumo da semana</a></div></div>
+<form method="post" action="{{ url_for('perguntar') }}" class="pergunta" data-espera="Consultando as atas…" style="margin-top:0">
+<input name="pergunta" placeholder="Pergunte sobre suas reuniões… ex.: qual prazo combinamos com a Ivone?" required>
+<button class="sec">Perguntar</button></form>
 
 {% if gravando %}<div class="alerta rec"><b>● Gravando agora{% if titulo_gravacao %}: {{ titulo_gravacao }}{% endif %}</b>
 <span><form class="inline" method="post" action="/api/janela/abrir"><input type="hidden" name="x" value="1"><button class="sec">Mostrar janela</button></form>
@@ -79,6 +84,12 @@ a.stat:hover{border-color:var(--pri)}
 <div class="stat pri"><b>{{ eventos_hoje }}</b><span>Compromissos hoje</span></div>
 <a class="stat" href="{{ url_for('tarefas') }}"><b>{{ minhas|length }}</b><span>Tarefas em aberto</span></a>
 </div>
+
+{% if atencao %}<section class="box" style="margin-bottom:18px">
+<div class="box-h"><h2>Clientes que precisam de atenção</h2><a class="mut" href="{{ url_for('lista_clientes') }}">Todos os clientes →</a></div>
+<div class="atencao">{% for c in atencao %}<a class="nivel-{{ c.nivel }}" href="{{ url_for('ficha_cliente', cliente_id=c.id) }}">
+<b>{{ c.nome }}</b><ul class="motivos">{% for nivel, txt in c.motivos %}<li class="m-{{ nivel }}">{{ txt }}</li>{% endfor %}</ul></a>{% endfor %}</div>
+</section>{% endif %}
 
 <div class="cols">
 <!-- ===================== AGENDA ===================== -->
@@ -235,3 +246,5 @@ function filtrarHistorico(q){
   document.getElementById('hist-vazio').style.display = algum ? 'none' : '';
 }
 </script>
+
+<div class="status-sis">{% for i in status %}<span title="{{ i.detalhe }}"><i class="{{ '' if i.ok else 'nok' }}"></i>{{ i.nome }}: {{ i.detalhe }}</span>{% endfor %}</div>

@@ -1,0 +1,42 @@
+<h1>Resumo da semana</h1>
+<p class="mut">{{ s.inicio.strftime('%d/%m') }} a {{ s.fim.strftime('%d/%m') }}</p>
+
+<div class="stats">
+<div class="stat pri"><b>{{ s.reunioes|length }}</b><span>Reuniões com ata</span></div>
+<div class="stat ok"><b>{{ s.concluidas|length }}</b><span>Tarefas concluídas</span></div>
+<div class="stat warn"><b>{{ s.vencem|length }}</b><span>Vencem nos próximos 7 dias</span></div>
+<div class="stat err"><b>{{ s.atrasadas|length }}</b><span>Atrasadas</span></div>
+</div>
+
+<div class="fc-grid">
+<section class="box"><div class="box-h"><h2>O que foi decidido</h2></div>
+{% for r in s.reunioes %}<div class="li col"><div><b>{{ r.titulo }}</b> <span class="mut">· {{ r.cliente }} · {{ r.data[8:10] }}/{{ r.data[5:7] }}</span></div>
+{% if r.decisoes %}<ul>{% for d in r.decisoes %}<li>{{ d }}</li>{% endfor %}</ul>{% else %}<span class="mut">Sem decisões registradas.</span>{% endif %}
+<a class="mut" href="{{ url_for('ver_ata', event_id=r.event_id) }}">ver ata</a></div>
+{% else %}<div class="li mut">Nenhuma ata nesta semana.</div>{% endfor %}</section>
+
+<section class="box"><div class="box-h"><h2>Você concluiu</h2></div>
+{% for t in s.concluidas %}<div class="li"><span>✓ {{ t.descricao }}</span><span class="mut">{{ t.cliente or '' }}</span></div>
+{% else %}<div class="li mut">Nenhuma tarefa concluída nos últimos 7 dias.</div>{% endfor %}</section>
+
+<section class="box"><div class="box-h"><h2>Próxima semana</h2></div>
+{% for e in s.proximas %}<div class="li"><span>{{ e.titulo }}</span><span class="mut">{{ e.inicio[8:10] }}/{{ e.inicio[5:7] }} {{ e.inicio[11:16] or 'dia todo' }}</span></div>{% endfor %}
+{% for t in s.vencem %}<div class="li"><span>Prazo: {{ t.descricao }}</span><span class="due {{ 'hj' if t.hoje }}">{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}</span></div>{% endfor %}
+{% if not s.proximas and not s.vencem %}<div class="li mut">Nada marcado.</div>{% endif %}</section>
+
+<section class="box"><div class="box-h"><h2>Atrasadas</h2></div>
+{% for t in s.atrasadas %}<div class="li"><span>{{ t.descricao }} <span class="mut">· {{ t.cliente or 'sem cliente' }}</span></span><span class="due atr">{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}</span></div>
+{% else %}<div class="li mut">Nenhuma. 👏</div>{% endfor %}</section>
+</div>
+
+<h2 style="margin-top:28px">Números de {{ mes }}</h2>
+<div class="stats">
+<div class="stat"><b>{{ n.atas }}</b><span>Atas geradas</span></div>
+<div class="stat"><b>{{ n.horas_meet }}h</b><span>Em reuniões do Meet</span></div>
+<div class="stat"><b>{{ n.criadas }}</b><span>Tarefas criadas</span></div>
+<div class="stat"><b>{{ n.concluidas }}</b><span>Tarefas concluídas</span></div>
+</div>
+<section class="box"><div class="box-h"><h2>Reuniões por cliente</h2></div>
+{% for nome, qtd in n.reunioes_por_cliente %}<div class="barra"><span class="bn">{{ nome }}</span>
+<span class="bt"><span class="bf" style="width:{{ (qtd / n.maior * 100)|round }}%"></span></span><b>{{ qtd }}</b></div>
+{% else %}<div class="li mut">Nenhuma ata neste mês.</div>{% endfor %}</section>

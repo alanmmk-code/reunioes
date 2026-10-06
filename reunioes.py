@@ -25,8 +25,10 @@ from flask import Flask, flash, redirect, render_template_string, request, url_f
 import analisador
 import assistente
 import atas
+import clientes
 import config
 import db
+import extras
 import google_services as g
 import gravador
 import lembretes
@@ -421,13 +423,16 @@ details>summary{cursor:pointer;list-style:none}
 .sinc{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12.5px}
 .sinc button{padding:4px 10px;font-size:12.5px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--bd)}.dot.on{background:var(--ok)}.dot.err{background:var(--err)}
-@media (max-width:600px){.sinc span:not(.dot){display:none}}details>summary::-webkit-details-marker{display:none}
+@media (max-width:600px){.sinc span:not(.dot){display:none}}
+{{ css_comum|safe }}details>summary::-webkit-details-marker{display:none}
 </style></head><body>
 <header class="top"><div class="in">
 <a class="logo" href="{{ url_for('inicio') }}"><i>R</i>Reuniões</a>
 <nav class="menu">
-<a href="{{ url_for('inicio') }}" class="{{ 'on' if not request.path.startswith('/tarefas') }}">Painel</a>
+<a href="{{ url_for('inicio') }}" class="{{ 'on' if request.path == '/' }}">Painel</a>
+<a href="{{ url_for('lista_clientes') }}" class="{{ 'on' if request.path.startswith('/cliente') }}">Clientes</a>
 <a href="{{ url_for('tarefas') }}" class="{{ 'on' if request.path.startswith('/tarefas') }}">Tarefas</a>
+<a href="{{ url_for('semana') }}" class="{{ 'on' if request.path.startswith('/semana') }}">Semana</a>
 </nav>
 {% if sinc_ligada %}<form method="post" action="{{ url_for('sincronizar_agora') }}" class="sinc" title="{{ sinc.erro or sinc.resumo or 'Sincroniza atas, tarefas e gravações com o seu Google Drive' }}">
 <span class="dot {{ 'err' if sinc.erro else ('on' if sinc.ultima else '') }}"></span>
@@ -445,7 +450,8 @@ const b=f.querySelector('button');b.disabled=true;b.textContent=f.dataset.espera
 
 def pagina(corpo_tpl: str, **ctx):
     corpo = render_template_string(corpo_tpl, **ctx)
-    return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR)
+    css = (config.BASE_DIR / "telas" / "comum.css").read_text(encoding="utf-8")
+    return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR, css_comum=css)
 
 
 @app.post("/sincronizar")
@@ -526,6 +532,8 @@ def inicio():
         minhas=minhas, recentes=recentes, feitas=atas.existentes(), pendentes=listar_pendentes(),
         gravando=GRAVADOR.ativo, titulo_gravacao=(GRAVADOR.reuniao or {}).get("titulo", ""), tarefa=TAREFA,
         seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME, historico=historico,
+        atencao=clientes.precisam_de_atencao(),
+        status=clientes.status_sistema(sincronia.ESTADO, config.GRAVACAO_AUTOMATICA),
     )
 
 
@@ -1221,6 +1229,10 @@ def cliente_renomear(cliente_id):
     return redirect(request.referrer or url_for("tarefas"))
 
 
+# Telas de clientes, cobrança, perguntas, nova reunião e semana (extras.py)
+extras.registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formulario, _breve)
+
+
 if __name__ == "__main__":
     comando = sys.argv[1] if len(sys.argv) > 1 else "web"
     if comando == "login":
@@ -1242,6 +1254,9 @@ if __name__ == "__main__":
             print("[monitor] vigiando chamadas do Meet")
         vigiar_janela()
         sincronia.iniciar_automatico()
+        # deixa pronto o status do sistema (verifica Google e Claude em segundo plano)
+        threading.Thread(target=lambda: clientes.status_sistema(sincronia.ESTADO, config.GRAVACAO_AUTOMATICA),
+                         daemon=True).start()
         if config.LEMBRETES:
             lembretes.iniciar(sugerir_cliente)
         # Deixa os modelos de voz prontos antes da primeira reunião

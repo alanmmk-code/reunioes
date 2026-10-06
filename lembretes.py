@@ -101,6 +101,20 @@ def briefings(estado: dict, sugerir_cliente) -> None:
             monitor.notificar(f"Reunião: {texto}", "Clique para ver a pauta e o histórico.", url(f"/resumo/{r['id']}"))
 
 
+# ---------------------------------------------------------------- resumo da semana (sexta-feira)
+
+def aviso_semanal(estado: dict) -> bool:
+    agora = datetime.now()
+    semana = agora.strftime("%G-%V")
+    if agora.weekday() != 4 or agora.strftime("%H:%M") < config.AVISO_SEMANAL_HORA or estado.get("aviso_semanal") == semana:
+        return False
+    estado["aviso_semanal"] = semana
+    monitor.notificar("Seu resumo da semana está pronto",
+                      "O que foi decidido, o que você concluiu e o que vem na próxima semana. Clique para ver.",
+                      url("/semana"))
+    return True
+
+
 # ---------------------------------------------------------------- ciclo
 
 def iniciar(sugerir_cliente) -> None:
@@ -110,6 +124,7 @@ def iniciar(sugerir_cliente) -> None:
             try:
                 estado = _estado()
                 aviso_diario(estado)
+                aviso_semanal(estado)
                 briefings(estado, sugerir_cliente)
                 _salvar(estado)
             except Exception as e:

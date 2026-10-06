@@ -50,6 +50,7 @@ GOOGLE_SCOPES = [
 # Lembretes: aviso diário das tarefas (HH:MM) e resumo antes de cada reunião
 AVISO_DIARIO_HORA = os.getenv("AVISO_DIARIO_HORA", "08:30")
 BRIEFING_MINUTOS_ANTES = int(os.getenv("BRIEFING_MINUTOS_ANTES", "10"))
+AVISO_SEMANAL_HORA = os.getenv("AVISO_SEMANAL_HORA", "16:00")  # sexta-feira
 LEMBRETES = os.getenv("LEMBRETES", "sim").lower() in ("sim", "s", "true", "1")
 
 # Sincronização dos dados entre PCs pelo Google Drive

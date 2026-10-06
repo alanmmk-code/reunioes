@@ -71,6 +71,17 @@ def criar_tabelas() -> None:
                             (_uuid.uuid4().hex, agora(), r["id"]))
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_clientes_uuid ON clientes(uuid)")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_tarefas_uuid ON tarefas(uuid)")
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS notas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                cliente_id INTEGER REFERENCES clientes(id),
+                texto TEXT NOT NULL,
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                excluido INTEGER NOT NULL DEFAULT 0
+            )"""
+        )
 
 
 # ---------------------------------------------------------------- clientes
@@ -201,6 +212,29 @@ def tarefas(somente_minhas=False, incluir_feitas=False, cliente_id=None) -> list
     return linhas
 
 
+# ---------------------------------------------------------------- anotações por cliente
+
+def notas(cliente_id) -> list[dict]:
+    with conexao() as con:
+        return [dict(r) for r in con.execute(
+            "SELECT * FROM notas WHERE cliente_id = ? AND excluido = 0 ORDER BY criado_em DESC", (cliente_id,))]
+
+
+def criar_nota(cliente_id, texto: str) -> int | None:
+    texto = (texto or "").strip()
+    if not texto or not cliente(cliente_id):
+        return None
+    momento = agora()
+    with conexao() as con:
+        return con.execute("INSERT INTO notas (uuid, cliente_id, texto, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?)",
+                           (_uuid.uuid4().hex, cliente_id, texto, momento, momento)).lastrowid
+
+
+def excluir_nota(nota_id: int) -> None:
+    with conexao() as con:
+        con.execute("UPDATE notas SET excluido = 1, atualizado_em = ? WHERE id = ?", (agora(), nota_id))
+
+
 # ---------------------------------------------------------------- sincronização
 
 def exportar() -> dict:
@@ -210,7 +244,10 @@ def exportar() -> dict:
         tar = [dict(r) for r in con.execute(
             f"SELECT t.uuid, c.uuid AS cliente_uuid, {', '.join('t.' + c for c in CAMPOS_TAREFA)} "
             "FROM tarefas t LEFT JOIN clientes c ON c.id = t.cliente_id ORDER BY t.uuid")]
-    return {"clientes": cli, "tarefas": tar}
+        nts = [dict(r) for r in con.execute(
+            "SELECT n.uuid, c.uuid AS cliente_uuid, n.texto, n.criado_em, n.atualizado_em, n.excluido "
+            "FROM notas n LEFT JOIN clientes c ON c.id = n.cliente_id ORDER BY n.uuid")]
+    return {"clientes": cli, "tarefas": tar, "notas": nts}
 
 
 def mesclar(remoto: dict) -> int:
@@ -256,6 +293,18 @@ def mesclar(remoto: dict) -> int:
             elif (t["atualizado_em"] or "") > (local["atualizado_em"] or ""):
                 con.execute(f"UPDATE tarefas SET cliente_id = ?, {', '.join(c + ' = ?' for c in CAMPOS_TAREFA)} "
                             "WHERE uuid = ?", (id_local(t["cliente_uuid"]), *valores, t["uuid"]))
+                mudou += 1
+
+        for n in remoto.get("notas", []):
+            local = con.execute("SELECT atualizado_em FROM notas WHERE uuid = ?", (n["uuid"],)).fetchone()
+            if not local:
+                con.execute("INSERT INTO notas (uuid, cliente_id, texto, criado_em, atualizado_em, excluido) "
+                            "VALUES (?, ?, ?, ?, ?, ?)", (n["uuid"], id_local(n["cliente_uuid"]), n["texto"],
+                                                           n["criado_em"], n["atualizado_em"], n["excluido"]))
+                mudou += 1
+            elif (n["atualizado_em"] or "") > (local["atualizado_em"] or ""):
+                con.execute("UPDATE notas SET cliente_id = ?, texto = ?, atualizado_em = ?, excluido = ? WHERE uuid = ?",
+                            (id_local(n["cliente_uuid"]), n["texto"], n["atualizado_em"], n["excluido"], n["uuid"]))
                 mudou += 1
     return mudou
 

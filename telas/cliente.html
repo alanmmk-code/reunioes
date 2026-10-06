@@ -1,0 +1,55 @@
+<div class="row" style="margin-bottom:6px">
+<div style="display:flex;align-items:center;gap:12px"><div class="av av-g">{{ c.nome[:1]|upper }}</div>
+<div><h1 style="margin:0">{{ c.nome }}</h1>
+<p class="mut" style="margin:0">{{ c.reunioes }} reuni{{ 'ões' if c.reunioes != 1 else 'ão' }}{% if c.ultima %} · última em {{ c.ultima[8:10] }}/{{ c.ultima[5:7] }}/{{ c.ultima[0:4] }}{% if c.dias_sem_reuniao %} (há {{ c.dias_sem_reuniao }} dias){% endif %}{% endif %}</p></div></div>
+<div class="row" style="gap:8px">
+<a class="btn" href="{{ url_for('nova_reuniao', cliente=c.id) }}">Nova reunião</a>
+{% if c.dele %}<a class="btn sec" href="{{ url_for('cobrar', cliente_id=c.id) }}">Cobrar pendências</a>{% endif %}
+</div></div>
+{% if c.motivos %}<ul class="motivos linha-motivos">{% for nivel, txt in c.motivos %}<li class="m-{{ nivel }}">{{ txt }}</li>{% endfor %}</ul>{% endif %}
+
+<form method="post" action="{{ url_for('perguntar') }}" class="pergunta" data-espera="Consultando as atas…">
+<input type="hidden" name="cliente_id" value="{{ c.id }}">
+<input name="pergunta" placeholder="Pergunte sobre as reuniões com {{ c.nome }}… ex.: qual preço combinamos?" required>
+<button>Perguntar</button></form>
+
+<div class="fc-grid">
+<section class="box"><div class="box-h"><h2>Suas tarefas</h2><span class="mut">{{ c.minhas|length }}</span></div>
+{% for t in c.minhas %}<div class="li"><span>{{ t.descricao }}</span>
+<span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>
+{% else %}<div class="li mut">Nada pendente do seu lado.</div>{% endfor %}</section>
+
+<section class="box"><div class="box-h"><h2>Pendências do cliente</h2>
+{% if c.dele %}<a class="mut" href="{{ url_for('cobrar', cliente_id=c.id) }}">Cobrar →</a>{% endif %}</div>
+{% for t in c.dele %}<div class="li"><span>{{ t.descricao }} <span class="mut">· {{ t.responsavel }}</span></span>
+<span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>
+{% else %}<div class="li mut">Nada pendente do lado do cliente.</div>{% endfor %}</section>
+
+<section class="box"><div class="box-h"><h2>Próximas reuniões</h2></div>
+{% for e in proximas %}<div class="li"><span>{{ e.titulo }} <span class="mut">· {{ e.inicio[8:10] }}/{{ e.inicio[5:7] }} {{ e.inicio[11:16] }}</span></span>
+<a class="btn sec" href="{{ url_for('resumo', event_id=e.id) }}">Resumo</a></div>
+{% else %}<div class="li mut">Nenhuma marcada nos próximos 30 dias. <a href="{{ url_for('nova_reuniao', cliente=c.id) }}">Marcar</a></div>{% endfor %}</section>
+
+<section class="box"><div class="box-h"><h2>Contatos</h2><span class="mut">das reuniões</span></div>
+{% for p in contatos %}<div class="li"><span>{{ p.nome or p.email }}{% if p.nome %} <span class="mut">· {{ p.email }}</span>{% endif %}</span>
+<span class="mut">{{ p.reunioes }} reuni{{ 'ões' if p.reunioes != 1 else 'ão' }}</span></div>
+{% else %}<div class="li mut">Os participantes das reuniões com este cliente aparecem aqui.</div>{% endfor %}</section>
+</div>
+
+<section class="box" style="margin-top:18px"><div class="box-h"><h2>Histórico de reuniões</h2></div>
+{% for r in reunioes %}<details class="hm"><summary><span class="mut">{{ r.reuniao.inicio[8:10] }}/{{ r.reuniao.inicio[5:7] }}/{{ r.reuniao.inicio[0:4] }}</span>
+<b>{{ r.ata.titulo }}</b><span class="br">{{ r.breve }}</span></summary>
+<div class="det"><p>{{ r.ata.resumo }}</p>
+{% if r.ata.decisoes %}<b class="rot">Decisões</b><ul>{% for d in r.ata.decisoes %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+<div class="row" style="justify-content:flex-start;gap:8px;margin-top:10px"><a class="btn" href="{{ url_for('ver_ata', event_id=r.event_id) }}">Ver ata</a>
+{% if r.doc_link and r.doc_link.startswith('http') %}<a class="btn sec" href="{{ r.doc_link }}" target="_blank">Google Doc</a>{% endif %}</div></div></details>
+{% else %}<div class="li mut">Nenhuma ata com este cliente ainda.</div>{% endfor %}</section>
+
+<section class="box" style="margin-top:18px" id="notas"><div class="box-h"><h2>Anotações</h2><span class="mut">ligações, WhatsApp, combinados fora das reuniões</span></div>
+<form method="post" action="{{ url_for('nota_nova', cliente_id=c.id) }}" class="nota-form">
+<textarea name="texto" rows="2" placeholder="Ex.: João ligou pedindo para adiantar a entrega…" required></textarea>
+<button>Salvar</button></form>
+{% for n in notas %}<div class="nota"><div class="mut">{{ n.criado_em[8:10] }}/{{ n.criado_em[5:7] }}/{{ n.criado_em[0:4] }}</div>
+<div style="white-space:pre-wrap">{{ n.texto }}</div>
+<form method="post" action="{{ url_for('nota_excluir', nota_id=n.id) }}" onsubmit="return confirm('Excluir esta anotação?')"><button class="del" title="Excluir">×</button></form></div>
+{% else %}<div class="li mut">Nenhuma anotação.</div>{% endfor %}</section>

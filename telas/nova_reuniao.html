@@ -1,0 +1,22 @@
+<h1>Nova reunião</h1>
+<p class="mut">Cria o evento no Google Agenda com link do Meet e envia o convite para os convidados.</p>
+<form method="get" class="row" style="justify-content:flex-start;margin-bottom:10px">
+<span class="mut">Cliente:</span>
+<select name="cliente" onchange="this.form.submit()" style="width:auto"><option value="">— sem cliente —</option>
+{% for x in clientes %}<option value="{{ x.id }}" {{ 'selected' if c and x.id == c.id }}>{{ x.nome }}</option>{% endfor %}</select>
+{% if c %}<span class="mut">convidados e pauta preenchidos com os dados de {{ c.nome }}</span>{% endif %}</form>
+
+<form method="post" class="card" data-espera="Criando…" style="display:grid;gap:10px">
+<input type="hidden" name="cliente_id" value="{{ c.id if c else '' }}">
+<label class="mut">Título <input name="titulo" value="{{ titulo }}" required></label>
+<div class="nr-linha">
+<label class="mut">Data <input type="date" name="data" value="{{ data }}" required></label>
+<label class="mut">Hora <input type="time" name="hora" value="10:00" required></label>
+<label class="mut">Duração <select name="duracao">{% for m in [15, 30, 45, 60, 90, 120] %}<option value="{{ m }}" {{ 'selected' if m == 30 }}>{{ m }} min</option>{% endfor %}</select></label>
+</div>
+<label class="mut">Convidados (e-mails separados por vírgula)
+<input name="convidados" value="{{ convidados }}" placeholder="pessoa@cliente.com"></label>
+<label class="mut">Pauta <textarea name="pauta" rows="8">{{ pauta }}</textarea></label>
+<div class="row" style="justify-content:flex-start;gap:8px"><button>Criar reunião e enviar convites</button>
+<a class="btn sec" href="{{ url_for('ficha_cliente', cliente_id=c.id) if c else url_for('inicio') }}">Cancelar</a></div>
+</form>
