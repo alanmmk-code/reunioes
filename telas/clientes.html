@@ -1,6 +1,20 @@
 <div class="row" style="margin-bottom:16px"><div><h1>Clientes</h1>
 <p class="mut" style="margin:0">Quem precisa de atenção aparece primeiro.</p></div>
-<a class="btn" href="{{ url_for('nova_reuniao') }}">+ Nova reunião</a></div>
+<div style="display:flex;gap:8px"><button type="button" onclick="document.getElementById('novo-cli').showModal()">+ Novo cliente</button>
+<a class="btn sec" href="{{ url_for('nova_reuniao') }}">+ Nova reunião</a></div></div>
+
+<dialog id="novo-cli" class="modal">
+<form method="post" action="{{ url_for('cliente_novo') }}">
+<h2 style="margin-top:0">Novo cliente</h2>
+<label class="mut">Nome <input name="nome" required autofocus placeholder="Ex.: Plásticos Ivone"></label>
+<label class="mut">E-mails ou domínio do cliente <span>(opcional)</span>
+<input name="emails" placeholder="Ex.: joao@ivone.com, @ivone.com"></label>
+<p class="mut" style="margin:0;font-size:12.5px">Com o domínio (ex.: <b>@ivone.com</b>), quando alguém dessa empresa estiver na reunião,
+a janelinha do Meet já vem com este cliente selecionado. Os e-mails também viram contatos para cobrança e convites.</p>
+<input type="hidden" name="abrir" value="1">
+<div class="row" style="justify-content:flex-end;gap:8px;margin-top:6px">
+<button type="button" class="sec" onclick="this.closest('dialog').close()">Cancelar</button><button>Cadastrar</button></div>
+</form></dialog>
 
 <div class="cl-grid">
 {% for c in clientes %}
@@ -11,5 +25,5 @@
 {% else %}<p class="tudo-ok">✓ Tudo em dia</p>{% endif %}
 <div class="cl-num"><span><b>{{ c.minhas|length }}</b> suas</span><span><b>{{ c.dele|length }}</b> do cliente</span></div>
 </a>
-{% else %}<div class="card mut">Nenhum cliente ainda. Eles aparecem quando você escolhe o cliente de uma reunião, ou cadastre na aba Tarefas.</div>{% endfor %}
+{% else %}<div class="card mut">Nenhum cliente ainda. Clique em <b>+ Novo cliente</b> para cadastrar.</div>{% endfor %}
 </div>

@@ -69,6 +69,8 @@ def criar_tabelas() -> None:
             for r in con.execute(f"SELECT id FROM {tabela} WHERE uuid IS NULL").fetchall():
                 con.execute(f"UPDATE {tabela} SET uuid = ?, atualizado_em = ? WHERE id = ?",
                             (_uuid.uuid4().hex, agora(), r["id"]))
+        if "emails" not in {r["name"] for r in con.execute("PRAGMA table_info(clientes)")}:
+            con.execute("ALTER TABLE clientes ADD COLUMN emails TEXT NOT NULL DEFAULT ''")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_clientes_uuid ON clientes(uuid)")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_tarefas_uuid ON tarefas(uuid)")
         con.execute(
@@ -107,7 +109,30 @@ def cliente_por_uuid(cliente_uuid) -> dict | None:
         return dict(r) if r else None
 
 
-def criar_cliente(nome: str) -> int:
+def _limpar_emails(emails: str) -> str:
+    """Normaliza 'joao@ivone.com; @ivone.com' -> 'joao@ivone.com, @ivone.com'."""
+    itens = [e.strip().lower() for e in (emails or "").replace(";", ",").replace("\n", ",").split(",")]
+    vistos = []
+    for e in itens:
+        if "@" in e and e not in vistos:
+            vistos.append(e)
+    return ", ".join(vistos)
+
+
+def cliente_por_email(email: str) -> int | None:
+    """Cliente cujo e-mail ou domínio (@empresa.com) cadastrado bate com este e-mail."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return None
+    dominio = "@" + email.split("@", 1)[1]
+    for c in clientes():
+        cadastrados = [e.strip() for e in (c.get("emails") or "").split(",") if e.strip()]
+        if email in cadastrados or dominio in cadastrados:
+            return c["id"]
+    return None
+
+
+def criar_cliente(nome: str, emails: str = "") -> int:
     nome = nome.strip()
     with conexao() as con:
         existente = con.execute("SELECT id, excluido FROM clientes WHERE nome = ?", (nome,)).fetchone()
@@ -116,8 +141,14 @@ def criar_cliente(nome: str) -> int:
                 con.execute("UPDATE clientes SET excluido = 0, atualizado_em = ? WHERE id = ?", (agora(), existente["id"]))
             return existente["id"]
         momento = agora()
-        return con.execute("INSERT INTO clientes (nome, criado_em, uuid, atualizado_em) VALUES (?, ?, ?, ?)",
-                           (nome, momento, _uuid.uuid4().hex, momento)).lastrowid
+        return con.execute("INSERT INTO clientes (nome, criado_em, uuid, atualizado_em, emails) VALUES (?, ?, ?, ?, ?)",
+                           (nome, momento, _uuid.uuid4().hex, momento, _limpar_emails(emails))).lastrowid
+
+
+def atualizar_cliente(cliente_id: int, nome: str, emails: str) -> None:
+    with conexao() as con:
+        con.execute("UPDATE clientes SET nome = ?, emails = ?, atualizado_em = ? WHERE id = ?",
+                    (nome.strip(), _limpar_emails(emails), agora(), cliente_id))
 
 
 def renomear_cliente(cliente_id: int, nome: str) -> None:
@@ -240,7 +271,8 @@ def excluir_nota(nota_id: int) -> None:
 def exportar() -> dict:
     """Tudo (inclusive excluídos), com o cliente referenciado pelo uuid — igual em todos os PCs."""
     with conexao() as con:
-        cli = [dict(r) for r in con.execute("SELECT uuid, nome, criado_em, atualizado_em, excluido FROM clientes ORDER BY uuid")]
+        cli = [dict(r) for r in con.execute(
+            "SELECT uuid, nome, emails, criado_em, atualizado_em, excluido FROM clientes ORDER BY uuid")]
         tar = [dict(r) for r in con.execute(
             f"SELECT t.uuid, c.uuid AS cliente_uuid, {', '.join('t.' + c for c in CAMPOS_TAREFA)} "
             "FROM tarefas t LEFT JOIN clientes c ON c.id = t.cliente_id ORDER BY t.uuid")]
@@ -265,12 +297,13 @@ def mesclar(remoto: dict) -> int:
                         con.execute("UPDATE clientes SET uuid = ? WHERE id = ?", (c["uuid"], local["id"]))
                         mudou += 1
                     continue
-                con.execute("INSERT INTO clientes (uuid, nome, criado_em, atualizado_em, excluido) VALUES (?, ?, ?, ?, ?)",
-                            (c["uuid"], c["nome"], c["criado_em"], c["atualizado_em"], c["excluido"]))
+                con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
+                            "VALUES (?, ?, ?, ?, ?, ?)", (c["uuid"], c["nome"], c.get("emails", ""), c["criado_em"],
+                                                          c["atualizado_em"], c["excluido"]))
                 mudou += 1
             elif (c["atualizado_em"] or "") > (local["atualizado_em"] or ""):
-                con.execute("UPDATE clientes SET nome = ?, atualizado_em = ?, excluido = ? WHERE id = ?",
-                            (c["nome"], c["atualizado_em"], c["excluido"], local["id"]))
+                con.execute("UPDATE clientes SET nome = ?, emails = ?, atualizado_em = ?, excluido = ? WHERE id = ?",
+                            (c["nome"], c.get("emails", ""), c["atualizado_em"], c["excluido"], local["id"]))
                 mudou += 1
 
         ids = {r["uuid"]: r["id"] for r in con.execute("SELECT id, uuid FROM clientes")}

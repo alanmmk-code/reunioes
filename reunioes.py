@@ -88,8 +88,13 @@ def tarefas_da_ata(event_id: str) -> str:
 
 
 def sugerir_cliente(reuniao: dict) -> int | None:
-    """Cliente provável: o de atas anteriores com as mesmas pessoas ou o mesmo título."""
+    """Cliente provável: pelos e-mails/domínio cadastrados no cliente; senão, pelas atas anteriores
+    com as mesmas pessoas ou o mesmo título."""
     emails = {p["email"].lower() for p in reuniao.get("participantes", [])}
+    for email in emails:
+        cid = db.cliente_por_email(email)
+        if cid:
+            return cid
     votos = {}
     for event_id in atas.existentes():
         reg = atas.carregar(event_id) or {}
@@ -1218,8 +1223,23 @@ def tarefa_atualizar(tarefa_id):
 
 @app.post("/clientes/novo")
 def cliente_novo():
-    db.criar_cliente(request.form["nome"])
+    nome = request.form.get("nome", "").strip()
+    if not nome:
+        flash("Digite o nome do cliente.")
+        return redirect(request.referrer or url_for("tarefas"))
+    cid = db.criar_cliente(nome, request.form.get("emails", ""))
+    flash(f"Cliente {nome} cadastrado. Ele já aparece para escolher quando você abrir o Meet.")
+    if request.form.get("abrir"):
+        return redirect(url_for("ficha_cliente", cliente_id=cid))
     return redirect(request.referrer or url_for("tarefas"))
+
+
+@app.post("/clientes/<int:cliente_id>/editar")
+def cliente_editar(cliente_id):
+    if request.form.get("nome", "").strip():
+        db.atualizar_cliente(cliente_id, request.form["nome"], request.form.get("emails", ""))
+        flash("Cliente atualizado.")
+    return redirect(url_for("ficha_cliente", cliente_id=cliente_id))
 
 
 @app.post("/clientes/<int:cliente_id>")

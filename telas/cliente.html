@@ -6,6 +6,11 @@
 <a class="btn" href="{{ url_for('nova_reuniao', cliente=c.id) }}">Nova reunião</a>
 {% if c.dele %}<a class="btn sec" href="{{ url_for('cobrar', cliente_id=c.id) }}">Cobrar pendências</a>{% endif %}
 </div></div>
+<details class="editar-cli"><summary class="mut">Editar cliente{% if c.emails %} · {{ c.emails }}{% else %} · cadastre os e-mails ou o domínio para o Meet reconhecer este cliente{% endif %}</summary>
+<form method="post" action="{{ url_for('cliente_editar', cliente_id=c.id) }}" class="card" style="display:grid;gap:10px;margin-top:8px">
+<label class="mut">Nome <input name="nome" value="{{ c.nome }}" required></label>
+<label class="mut">E-mails ou domínio <input name="emails" value="{{ c.emails or '' }}" placeholder="joao@ivone.com, @ivone.com"></label>
+<div><button>Salvar</button></div></form></details>
 {% if c.motivos %}<ul class="motivos linha-motivos">{% for nivel, txt in c.motivos %}<li class="m-{{ nivel }}">{{ txt }}</li>{% endfor %}</ul>{% endif %}
 
 <form method="post" action="{{ url_for('perguntar') }}" class="pergunta" data-espera="Consultando as atas…">

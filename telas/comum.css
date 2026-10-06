@@ -85,3 +85,9 @@ label.mut{display:flex;flex-direction:column;gap:4px;font-size:13px}
 .status-sis span{display:inline-flex;align-items:center;gap:6px}
 .status-sis i{width:8px;height:8px;border-radius:50%;background:var(--ok)}
 .status-sis i.nok{background:var(--err)}
+/* janela de cadastro */
+dialog.modal{border:1px solid var(--bd);border-radius:14px;padding:22px;width:min(480px,92vw);background:var(--card);color:var(--tx);box-shadow:0 20px 50px rgba(0,0,0,.3)}
+dialog.modal::backdrop{background:rgba(0,0,0,.45)}
+dialog.modal form{display:grid;gap:12px}
+.editar-cli{margin-top:8px}
+.editar-cli>summary{font-size:12.5px}

@@ -54,6 +54,9 @@ def contatos(cliente_id) -> list[dict]:
     """Pessoas que participaram das reuniões com o cliente (e-mail, nome, quantas reuniões)."""
     eu = minha_conta()
     pessoas = {}
+    c = db.cliente(cliente_id) or {}
+    for email in [e.strip() for e in (c.get("emails") or "").split(",") if e.strip() and not e.strip().startswith("@")]:
+        pessoas[email] = {"email": email, "nome": "", "reunioes": 0}
     for reg in atas_do_cliente(cliente_id):
         for p in reg["reuniao"].get("participantes", []):
             email = (p.get("email") or "").lower()
