@@ -1,6 +1,7 @@
 """Integração com Google: Agenda, Meet (transcrições), Drive (Docs) e Gmail."""
 
 import base64
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -15,7 +16,7 @@ from googleapiclient.http import MediaInMemoryUpload
 
 import config
 
-_services = {}
+_locais = threading.local()  # um conjunto de serviços por thread
 
 
 def _credentials() -> Credentials:
@@ -38,14 +39,19 @@ def _credentials() -> Credentials:
 
 
 def _svc(name: str, version: str):
-    if name not in _services:
+    """Serviço do Google para a thread atual. A biblioteca (httplib2) não aceita a mesma conexão usada por
+    várias threads ao mesmo tempo (dá erro de SSL); painel, lembretes e sincronização rodam em paralelo."""
+    servicos = getattr(_locais, "servicos", None)
+    if servicos is None:
+        servicos = _locais.servicos = {}
+    if name not in servicos:
         creds = _credentials()
         try:
-            _services[name] = build(name, version, credentials=creds, cache_discovery=False)
+            servicos[name] = build(name, version, credentials=creds, cache_discovery=False)
         except Exception:
             # Bibliotecas antigas podem não ter o documento de descoberta embutido (ex.: Meet)
-            _services[name] = build(name, version, credentials=creds, static_discovery=False)
-    return _services[name]
+            servicos[name] = build(name, version, credentials=creds, static_discovery=False)
+    return servicos[name]
 
 
 def autenticar() -> str:
