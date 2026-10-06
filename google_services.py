@@ -232,6 +232,68 @@ def criar_google_doc(titulo: str, html: str) -> str:
     return arquivo["webViewLink"]
 
 
+PASTA_MIME = "application/vnd.google-apps.folder"
+
+
+def drive_pasta(nome: str) -> str:
+    """Id da pasta do app na raiz do Drive (cria se não existir; havendo duplicadas, usa a mais antiga)."""
+    drive = _svc("drive", "v3")
+    nome_q = nome.replace("\\", "\\\\").replace("'", "\\'")
+    achadas = drive.files().list(
+        q=f"name = '{nome_q}' and mimeType = '{PASTA_MIME}' and trashed = false and 'root' in parents",
+        fields="files(id, createdTime)", orderBy="createdTime", pageSize=10,
+    ).execute().get("files", [])
+    if achadas:
+        return achadas[0]["id"]
+    return drive.files().create(body={"name": nome, "mimeType": PASTA_MIME}, fields="id").execute()["id"]
+
+
+def drive_listar(pasta_id: str) -> dict[str, dict]:
+    """Arquivos da pasta: nome -> {id, modifiedTime, appProperties}."""
+    drive, arquivos, token = _svc("drive", "v3"), {}, None
+    while True:
+        resp = drive.files().list(
+            q=f"'{pasta_id}' in parents and trashed = false",
+            fields="nextPageToken, files(id, name, modifiedTime, appProperties)",
+            pageSize=1000, pageToken=token,
+        ).execute()
+        for f in resp.get("files", []):
+            arquivos.setdefault(f["name"], f)
+        token = resp.get("nextPageToken")
+        if not token:
+            return arquivos
+
+
+def drive_enviar(pasta_id: str, nome: str, conteudo: bytes | None = None, caminho=None,
+                 mimetype: str = "application/json", file_id: str | None = None, props: dict | None = None) -> str:
+    """Cria ou atualiza um arquivo na pasta. Use `conteudo` (bytes) ou `caminho` (arquivo grande)."""
+    from googleapiclient.http import MediaFileUpload
+
+    media = (MediaFileUpload(str(caminho), mimetype=mimetype, resumable=True) if caminho
+             else MediaInMemoryUpload(conteudo, mimetype=mimetype, resumable=False))
+    drive = _svc("drive", "v3")
+    if file_id:
+        return drive.files().update(fileId=file_id, body={"appProperties": props or {}},
+                                    media_body=media, fields="id").execute()["id"]
+    corpo = {"name": nome, "parents": [pasta_id], "appProperties": props or {}}
+    return drive.files().create(body=corpo, media_body=media, fields="id").execute()["id"]
+
+
+def drive_baixar(file_id: str, destino=None) -> bytes | None:
+    """Baixa um arquivo; com `destino`, grava direto no disco (para arquivos grandes)."""
+    from googleapiclient.http import MediaIoBaseDownload
+
+    pedido = _svc("drive", "v3").files().get_media(fileId=file_id)
+    if destino is None:
+        return pedido.execute()
+    with open(destino, "wb") as f:
+        baixador = MediaIoBaseDownload(f, pedido, chunksize=8 * 1024 * 1024)
+        terminou = False
+        while not terminou:
+            _, terminou = baixador.next_chunk()
+    return None
+
+
 def enviar_email(destinatarios: list[str], assunto: str, html: str) -> None:
     msg = MIMEMultipart("alternative")
     msg["To"] = ", ".join(destinatarios)

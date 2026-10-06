@@ -12,6 +12,15 @@ def _arquivo(event_id: str):
 
 
 def salvar(event_id: str, registro: dict) -> None:
+    import db
+
+    registro["atualizado_em"] = db.agora()  # usado para mesclar entre PCs
+    cli = db.cliente(registro.get("cliente_id"))
+    registro["cliente_uuid"] = cli["uuid"] if cli else None
+    salvar_bruto(event_id, registro)
+
+
+def salvar_bruto(event_id: str, registro: dict) -> None:
     _arquivo(event_id).write_text(json.dumps(registro, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

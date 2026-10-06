@@ -28,11 +28,19 @@ import db
 import google_services as g
 import gravador
 import monitor
+import sincronia
 
 app = Flask(__name__)
 app.secret_key = "reunioes-local"
 
 GRAVADOR = gravador.Gravador()
+
+
+@app.after_request
+def _sincronizar_apos_alteracao(resposta):
+    if request.method == "POST" and not request.path.startswith(("/api/", "/sincronizar")):
+        sincronia.agendar()
+    return resposta
 AO_VIVO: assistente.AoVivo | None = None  # assistente da reunião em andamento
 # Andamento do processamento depois que a gravação para (transcrição -> ata)
 TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None, "titulo": "", "transcricao_salva": None}
@@ -61,6 +69,7 @@ def processar(reuniao: dict, transcricao: str, origem: str) -> dict:
     }
     atas.salvar(reuniao["id"], registro)
     db.importar_acoes_da_ata(reuniao, ata, reuniao["cliente_id"])
+    sincronia.agendar()
     return registro
 
 
@@ -134,6 +143,21 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
             monitor.notificar("Erro ao gerar a ata", str(e)[:150])
     finally:
         TAREFA["ativa"] = False
+
+
+def processar_texto(reuniao: dict, texto: str) -> None:
+    """Gera a ata a partir de uma transcrição já pronta (ex.: a feita ao vivo, quando o áudio está em outro PC)."""
+    with _fila_processamento:
+        TAREFA.update(ativa=True, etapa="Escrevendo a ata com o Claude", pct=100, erro=None, transcricao_salva=None,
+                      event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
+        try:
+            processar(reuniao, texto, "Transcrição feita ao vivo")
+            TAREFA.update(etapa="Concluído")
+        except Exception as e:
+            traceback.print_exc()
+            TAREFA.update(erro=str(e))
+        finally:
+            TAREFA["ativa"] = False
 
 
 # ---------------------------------------------------------------- Gravação automática
@@ -231,23 +255,47 @@ def ao_encerrar_meet() -> None:
 def salvar_pendente(reuniao: dict, arquivos: dict, transcricao_ao_vivo: str, segundos: float) -> str:
     pid = arquivos["voce"].name.removesuffix("-voce.wav")
     dados = {"reuniao": {k: v for k, v in reuniao.items() if k != "anexos"},
-             "arquivos": {n: str(c) for n, c in arquivos.items()},
+             # só o nome: a pasta pode ser diferente em outro PC
+             "arquivos": {n: c.name for n, c in arquivos.items()},
              "transcricao_ao_vivo": transcricao_ao_vivo, "minutos": round(segundos / 60),
              "encerrada_em": datetime.now().isoformat(timespec="minutes")}
-    (config.GRAVACOES_DIR / f"{pid}.json").write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    _gravar_pendente(pid, dados)
     return pid
+
+
+def _gravar_pendente(pid: str, dados: dict) -> None:
+    dados["atualizado_em"] = db.agora()  # usado para mesclar entre PCs
+    (config.GRAVACOES_DIR / f"{pid}.json").write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    sincronia.agendar()
+
+
+def _resolver_pendente(pid: str, dados: dict, decisao: str) -> None:
+    """Marca como decidida (em vez de apagar), para a decisão chegar aos outros PCs."""
+    dados["resolvida"] = decisao
+    _gravar_pendente(pid, dados)
+
+
+def _audios_da_pendente(p: dict) -> dict:
+    """Caminhos dos áudios neste PC (só os que existem aqui)."""
+    caminhos = {n: config.GRAVACOES_DIR / Path(c).name for n, c in p["arquivos"].items()}
+    return {n: c for n, c in caminhos.items() if c.exists()}
 
 
 def carregar_pendente(pid: str) -> dict | None:
     arq = config.GRAVACOES_DIR / f"{pid}.json"
     if not arq.exists() or "/" in pid or "\\" in pid:
         return None
-    return json.loads(arq.read_text(encoding="utf-8"))
+    dados = json.loads(arq.read_text(encoding="utf-8"))
+    return None if dados.get("resolvida") else dados
 
 
 def listar_pendentes() -> list[dict]:
-    return [{"pid": p.stem, **json.loads(p.read_text(encoding="utf-8"))}
-            for p in sorted(config.GRAVACOES_DIR.glob("*.json"), reverse=True)]
+    lista = []
+    for arq in sorted(config.GRAVACOES_DIR.glob("*.json"), reverse=True):
+        dados = json.loads(arq.read_text(encoding="utf-8"))
+        if not dados.get("resolvida"):
+            lista.append({"pid": arq.stem, **dados})
+    return lista
 
 
 def modo_auto() -> None:
@@ -276,24 +324,60 @@ def modo_auto() -> None:
 
 BASE = """<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Reuniões</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#f6f7f9;--card:#fff;--tx:#1d2330;--mut:#667085;--bd:#e3e6eb;--pri:#1a73e8;--ok:#1e8e3e}
-@media (prefers-color-scheme:dark){:root{--bg:#14171c;--card:#1d2128;--tx:#e8eaed;--mut:#9aa0a6;--bd:#30353d;--pri:#8ab4f8;--ok:#81c995}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,Segoe UI,Arial}
-main{max-width:960px;margin:0 auto;padding:24px 16px}
-a{color:var(--pri)}h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:28px 0 8px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;margin:10px 0}
+:root{--bg:#f4f5f7;--card:#fff;--card2:#f9fafb;--tx:#111827;--tx2:#374151;--mut:#6b7280;--bd:#e5e7eb;
+--pri:#4f46e5;--pri-s:#eef2ff;--ok:#059669;--ok-s:#ecfdf5;--warn:#b45309;--warn-s:#fffbeb;--err:#dc2626;--err-s:#fef2f2;
+--sh:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);--r:12px}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#171a21;--card2:#1d212a;--tx:#f3f4f6;--tx2:#d1d5db;--mut:#9ca3af;--bd:#2a2f3a;
+--pri:#818cf8;--pri-s:#1e1b4b;--ok:#34d399;--ok-s:#052e22;--warn:#fbbf24;--warn-s:#2a1f05;--err:#f87171;--err-s:#2d0f0f;--sh:none}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14.5px/1.55 Inter,system-ui,"Segoe UI",Arial,sans-serif;-webkit-font-smoothing:antialiased}
+header.top{background:var(--card);border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5}
+header.top .in{max-width:1040px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:20px}
+.logo{font-weight:700;font-size:15px;color:var(--tx);text-decoration:none;display:flex;align-items:center;gap:8px}
+.logo i{width:26px;height:26px;border-radius:8px;background:var(--pri);color:#fff;display:grid;place-items:center;font-style:normal;font-size:13px}
+nav.menu{display:flex;gap:4px}
+nav.menu a{padding:6px 12px;border-radius:8px;color:var(--mut);text-decoration:none;font-weight:500}
+nav.menu a:hover{background:var(--card2);color:var(--tx)}
+nav.menu a.on{background:var(--pri-s);color:var(--pri)}
+main{max-width:1040px;margin:0 auto;padding:24px 16px 64px}
+a{color:var(--pri)}
+h1{font-size:24px;font-weight:700;letter-spacing:-.01em;margin:0 0 4px}
+h2{font-size:16px;font-weight:600;margin:28px 0 10px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:14px 16px;margin:10px 0;box-shadow:var(--sh)}
 .row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .mut{color:var(--mut);font-size:13px}.ok{color:var(--ok);font-weight:600}
-button,.btn{background:var(--pri);color:#fff;border:0;border-radius:6px;padding:7px 14px;font:inherit;cursor:pointer;text-decoration:none;display:inline-block}
-@media (prefers-color-scheme:dark){button,.btn{color:#14171c}}
-button.sec,.btn.sec{background:transparent;color:var(--pri);border:1px solid var(--pri)}
-textarea,input{width:100%;padding:8px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--tx);font:inherit}
-table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--bd);padding:6px;text-align:left;vertical-align:top}
-.flash{background:#fff4e5;color:#7a4a00;border-radius:8px;padding:10px 14px;margin:10px 0}
+button,.btn{background:var(--pri);color:#fff;border:1px solid transparent;border-radius:8px;padding:7px 14px;font:inherit;font-weight:500;
+cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:filter .15s}
+button:hover,.btn:hover{filter:brightness(1.08)}
+@media (prefers-color-scheme:dark){button,.btn{color:#0f1115}}
+button.sec,.btn.sec{background:var(--card);color:var(--tx2);border-color:var(--bd)}
+button.sec:hover,.btn.sec:hover{background:var(--card2);filter:none}
+textarea,input,select{width:100%;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);font:inherit}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--pri-s);border-color:var(--pri)}
+table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--bd);padding:8px 6px;text-align:left;vertical-align:top}
+.flash{background:var(--warn-s);color:var(--warn);border:1px solid var(--bd);border-radius:10px;padding:10px 14px;margin:10px 0}
 form.inline{display:inline}
-</style></head><body><main>
-<nav style="display:flex;gap:16px;margin-bottom:8px"><a href="{{ url_for('inicio') }}"><b>Reuniões</b></a><a href="{{ url_for('tarefas') }}"><b>Tarefas</b></a></nav>
+details>summary{cursor:pointer;list-style:none}
+.sinc{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--mut);font-size:12.5px}
+.sinc button{padding:4px 10px;font-size:12.5px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--bd)}.dot.on{background:var(--ok)}.dot.err{background:var(--err)}
+@media (max-width:600px){.sinc span:not(.dot){display:none}}details>summary::-webkit-details-marker{display:none}
+</style></head><body>
+<header class="top"><div class="in">
+<a class="logo" href="{{ url_for('inicio') }}"><i>R</i>Reuniões</a>
+<nav class="menu">
+<a href="{{ url_for('inicio') }}" class="{{ 'on' if not request.path.startswith('/tarefas') }}">Reuniões</a>
+<a href="{{ url_for('tarefas') }}" class="{{ 'on' if request.path.startswith('/tarefas') }}">Tarefas</a>
+</nav>
+{% if sinc_ligada %}<form method="post" action="{{ url_for('sincronizar_agora') }}" class="sinc" title="{{ sinc.erro or sinc.resumo or 'Sincroniza atas, tarefas e gravações com o seu Google Drive' }}">
+<span class="dot {{ 'err' if sinc.erro else ('on' if sinc.ultima else '') }}"></span>
+<span>{% if sinc.rodando %}Sincronizando…{% elif sinc.erro %}Erro ao sincronizar{% elif sinc.ultima %}Drive: {{ sinc.ultima.strftime('%H:%M') }}{% else %}Drive: aguardando{% endif %}</span>
+<button class="sec">Sincronizar</button></form>{% endif %}
+</div></header>
+<main>
 {% for m in get_flashed_messages() %}<div class="flash">{{ m }}</div>{% endfor %}
 {{ corpo|safe }}
 </main>
@@ -304,7 +388,16 @@ const b=f.querySelector('button');b.disabled=true;b.textContent=f.dataset.espera
 
 def pagina(corpo_tpl: str, **ctx):
     corpo = render_template_string(corpo_tpl, **ctx)
-    return render_template_string(BASE, corpo=corpo)
+    return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR)
+
+
+@app.post("/sincronizar")
+def sincronizar_agora():
+    try:
+        flash(f"Sincronizado com o Google Drive: {sincronia.sincronizar()}.")
+    except Exception as e:
+        flash(f"Não consegui sincronizar: {e}")
+    return redirect(request.referrer or url_for("inicio"))
 
 
 @app.route("/")
@@ -435,6 +528,9 @@ def pendente(pid):
     return pagina(
         """<h1>Gerar a ata desta reunião?</h1>
 <p><b>{{ p.reuniao.titulo }}</b> · {{ p.minutos }} min · encerrada em {{ p.encerrada_em.replace('T',' ') }}</p>
+{% if not tem_audio %}<div class="flash">O áudio desta reunião ficou no PC onde ela foi gravada.
+{% if p.transcricao_ao_vivo %}Dá para gerar a ata aqui com a transcrição feita ao vivo (um pouco menos precisa), ou gerar no outro PC.
+{% else %}Gere a ata naquele PC.{% endif %}</div>{% endif %}
 <div class="row" style="justify-content:flex-start">
 <form class="inline" method="post" action="{{ url_for('pendente_gerar', pid=pid) }}">{{ seletor_cliente(atual)|safe }} <button>Sim, gerar ata</button></form>
 <form class="inline" method="post" action="{{ url_for('pendente_descartar', pid=pid) }}"
@@ -442,7 +538,7 @@ onsubmit="return confirm('Apagar o áudio desta reunião? Não dá para desfazer
 <a class="btn sec" href="{{ url_for('inicio') }}">Decidir depois</a></div>
 {% if p.transcricao_ao_vivo %}<h2>O que foi captado ao vivo</h2>
 <div class="card" style="white-space:pre-wrap;font-size:13px;max-height:400px;overflow:auto">{{ p.transcricao_ao_vivo }}</div>{% endif %}""",
-        p=p, pid=pid, seletor_cliente=seletor_cliente,
+        p=p, pid=pid, seletor_cliente=seletor_cliente, tem_audio=bool(_audios_da_pendente(p)),
         atual=p["reuniao"].get("cliente_id") or p["reuniao"].get("cliente_sugerido"),
     )
 
@@ -452,10 +548,16 @@ def pendente_gerar(pid):
     p = carregar_pendente(pid)
     if p:
         p["reuniao"]["cliente_id"] = cliente_do_formulario()
-        arquivos = {n: Path(c) for n, c in p["arquivos"].items()}
-        (config.GRAVACOES_DIR / f"{pid}.json").unlink(missing_ok=True)
+        arquivos = _audios_da_pendente(p)
+        if not arquivos and not p.get("transcricao_ao_vivo"):
+            flash("O áudio desta reunião está em outro PC. Gere a ata por lá.")
+            return redirect(url_for("pendente", pid=pid))
+        _resolver_pendente(pid, p, "ata")
         TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=p["reuniao"]["id"])
-        threading.Thread(target=processar_gravacao, args=(p["reuniao"], arquivos), daemon=True).start()
+        if arquivos:
+            threading.Thread(target=processar_gravacao, args=(p["reuniao"], arquivos), daemon=True).start()
+        else:
+            threading.Thread(target=processar_texto, args=(p["reuniao"], p["transcricao_ao_vivo"]), daemon=True).start()
     return redirect(url_for("gravacao"))
 
 
@@ -463,9 +565,9 @@ def pendente_gerar(pid):
 def pendente_descartar(pid):
     p = carregar_pendente(pid)
     if p:
-        for c in p["arquivos"].values():
-            Path(c).unlink(missing_ok=True)
-        (config.GRAVACOES_DIR / f"{pid}.json").unlink(missing_ok=True)
+        for c in _audios_da_pendente(p).values():
+            c.unlink(missing_ok=True)
+        _resolver_pendente(pid, p, "descartada")
         flash("Áudio apagado.")
     return redirect(url_for("inicio"))
 
@@ -676,59 +778,149 @@ def tarefas():
         nova = {"id": request.args["nova_ata"], "titulo": reg["ata"]["titulo"], "cliente": cli["nome"] if cli else None,
                 "minhas": sum(1 for t in da_ata if t["minha"]), "cliente_qtd": sum(1 for t in da_ata if not t["minha"])}
     return pagina(
-        """{% if nova %}<div class="card" style="border-color:#1e8e3e">
-<b class="ok">✓ Ata pronta: {{ nova.titulo }}</b>{% if nova.cliente %} · cliente {{ nova.cliente }}{% endif %}<br>
+        """<style>
+.tk-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.tk-sub{color:var(--mut);margin:0}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 20px}
+@media (max-width:720px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh);text-decoration:none;color:var(--tx)}
+.stat b{display:block;font-size:26px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat span{color:var(--mut);font-size:13px;font-weight:500}
+.stat.err b{color:var(--err)}.stat.warn b{color:var(--warn)}.stat.pri b{color:var(--pri)}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.seg{display:inline-flex;background:var(--card2);border:1px solid var(--bd);border-radius:10px;padding:3px}
+.seg a{padding:6px 12px;border-radius:7px;color:var(--mut);text-decoration:none;font-weight:500;font-size:13.5px}
+.seg a.on{background:var(--card);color:var(--tx);box-shadow:var(--sh)}
+.bar select{width:auto;padding:7px 10px}
+.bar .lnk{color:var(--mut);font-size:13px;text-decoration:none;margin-left:auto}
+.bar .lnk:hover{color:var(--tx)}
+.grupo{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);margin:14px 0;overflow:hidden}
+.grupo-h{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bd);background:var(--card2)}
+.av{width:28px;height:28px;border-radius:8px;background:var(--pri-s);color:var(--pri);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
+.grupo-h h3{margin:0;font-size:15px;font-weight:600}
+.grupo-h .cnt{margin-left:auto;color:var(--mut);font-size:12.5px}
+.task{display:grid;grid-template-columns:28px 1fr auto auto 28px;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--bd)}
+.task:last-child{border-bottom:0}
+.task:hover{background:var(--card2)}
+.task.feito .t-txt{color:var(--mut);text-decoration:line-through}
+.chk{appearance:none;-webkit-appearance:none;width:20px;height:20px;border:2px solid var(--bd);border-radius:50%;cursor:pointer;margin:0;padding:0;display:grid;place-items:center;background:var(--card)}
+.chk:hover{border-color:var(--ok)}
+.chk:checked{background:var(--ok);border-color:var(--ok)}
+.chk:checked::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.t-txt{font-weight:500;color:var(--tx)}
+.t-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--card2);border:1px solid var(--bd);color:var(--tx2);text-decoration:none;white-space:nowrap}
+.pill.cli{background:var(--warn-s);color:var(--warn);border-color:transparent}
+a.pill:hover{border-color:var(--pri);color:var(--pri)}
+.due{position:relative;display:inline-flex}
+.due span{font-size:12.5px;font-weight:600;padding:4px 10px;border-radius:8px;background:var(--card2);color:var(--tx2);white-space:nowrap;cursor:pointer}
+.due span.atr{background:var(--err-s);color:var(--err)}
+.due span.hj{background:var(--warn-s);color:var(--warn)}
+.due span.sem{color:var(--mut);font-weight:500}
+.due input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;padding:0}
+.st{width:auto;padding:4px 8px;font-size:12.5px;font-weight:600;border-radius:8px;border:1px solid transparent;cursor:pointer}
+.st.a_fazer{background:var(--card2);color:var(--tx2);border-color:var(--bd)}
+.st.fazendo{background:var(--pri-s);color:var(--pri)}
+.st.feito{background:var(--ok-s);color:var(--ok)}
+.del{background:none;border:0;color:var(--mut);font-size:18px;line-height:1;padding:4px;opacity:0;cursor:pointer}
+.task:hover .del{opacity:1}.del:hover{color:var(--err);filter:none}
+@media (max-width:720px){.task{grid-template-columns:28px 1fr 28px}.task .due,.task .stw{grid-column:2}.del{opacity:1}}
+.vazio{text-align:center;padding:40px 16px;color:var(--mut)}
+.vazio b{display:block;color:var(--tx);font-size:16px;margin-bottom:4px}
+.novo{background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);margin:20px 0}
+.novo summary{padding:14px 16px;font-weight:600;color:var(--pri)}
+.novo form{padding:0 16px 16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.novo form .full{grid-column:1/-1}
+@media (max-width:720px){.novo form{grid-template-columns:1fr}}
+.aviso{border:1px solid var(--ok);background:var(--ok-s);border-radius:var(--r);padding:14px 16px;margin-bottom:18px}
+.aviso b{color:var(--ok)}
+</style>
+
+{% if nova %}<div class="aviso">
+<b>✓ Ata pronta: {{ nova.titulo }}</b>{% if nova.cliente %} · {{ nova.cliente }}{% endif %}<br>
 {% if nova.minhas %}{{ nova.minhas }} tarefa{{ 's' if nova.minhas > 1 }} nova{{ 's' if nova.minhas > 1 }} para você{% else %}Nenhuma tarefa nova para você{% endif %}{% if nova.cliente_qtd %} e {{ nova.cliente_qtd }} com o cliente/terceiros (veja em "Todas"){% endif %}.
-<div class="row" style="justify-content:flex-start;margin-top:8px">
+<div class="row" style="justify-content:flex-start;margin-top:10px">
 <a class="btn" href="{{ url_for('ver_ata', event_id=nova.id) }}">Ver a ata</a>
 {% if not nova.cliente %}<span class="mut">Esta ata está sem cliente: defina na página da ata.</span>{% endif %}</div></div>{% endif %}
-<h1>Tarefas e demandas</h1>
-<div class="row" style="justify-content:flex-start;gap:8px;margin:8px 0 16px">
-<a class="btn {{ '' if ver=='minhas' else 'sec' }}" href="{{ url_for('tarefas', ver='minhas', feitas=feitas and 1 or None, cliente=cliente_id) }}">O que eu tenho que fazer</a>
-<a class="btn {{ '' if ver=='todas' else 'sec' }}" href="{{ url_for('tarefas', ver='todas', feitas=feitas and 1 or None, cliente=cliente_id) }}">Todas (inclui as do cliente)</a>
-<form method="get" class="inline"><input type="hidden" name="ver" value="{{ ver }}">{% if feitas %}<input type="hidden" name="feitas" value="1">{% endif %}
-<select name="cliente" onchange="this.form.submit()" style="width:auto;padding:6px"><option value="">Todos os clientes</option>
-{% for c in clientes %}<option value="{{ c.id }}" {{ 'selected' if c.id == cliente_id }}>{{ c.nome }}</option>{% endfor %}</select></form>
-<a href="{{ url_for('tarefas', ver=ver, feitas=None if feitas else 1, cliente=cliente_id) }}">{{ 'Esconder concluídas' if feitas else 'Mostrar concluídas' }}</a>
+
+<div class="tk-head"><div><h1>Tarefas</h1>
+<p class="tk-sub">{{ 'O que ficou com você nas reuniões' if ver=='minhas' else 'Tudo o que foi combinado, inclusive o que ficou com os clientes' }}</p></div></div>
+
+{% set atr = abertas|selectattr('atrasada')|list|length %}
+{% set hj = abertas|selectattr('hoje')|list|length %}
+{% set sem = abertas|selectattr('dias','ne',None)|selectattr('dias','ge',1)|selectattr('dias','le',7)|list|length %}
+<div class="stats">
+<div class="stat err"><b>{{ atr }}</b><span>Atrasadas</span></div>
+<div class="stat warn"><b>{{ hj }}</b><span>Vencem hoje</span></div>
+<div class="stat pri"><b>{{ sem }}</b><span>Próximos 7 dias</span></div>
+<div class="stat"><b>{{ abertas|length }}</b><span>Em aberto</span></div>
 </div>
-<p><b style="color:#d93025">{{ abertas|selectattr('atrasada')|list|length }} atrasadas</b> ·
-<b>{{ abertas|selectattr('hoje')|list|length }} para hoje</b> · {{ abertas|length }} em aberto</p>
 
-{% for nome, itens in grupos.items() %}<h2>{{ nome }}</h2><div class="card" style="padding:4px 8px"><table>
-{% for t in itens %}<tr style="{{ 'opacity:.55' if t.status=='feito' }}">
-<td style="width:28px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
+<div class="bar">
+<div class="seg">
+<a class="{{ 'on' if ver=='minhas' }}" href="{{ url_for('tarefas', ver='minhas', feitas=feitas and 1 or None, cliente=cliente_id) }}">Minhas</a>
+<a class="{{ 'on' if ver=='todas' }}" href="{{ url_for('tarefas', ver='todas', feitas=feitas and 1 or None, cliente=cliente_id) }}">Todas</a>
+</div>
+<form method="get" class="inline"><input type="hidden" name="ver" value="{{ ver }}">{% if feitas %}<input type="hidden" name="feitas" value="1">{% endif %}
+<select name="cliente" onchange="this.form.submit()"><option value="">Todos os clientes</option>
+{% for c in clientes %}<option value="{{ c.id }}" {{ 'selected' if c.id == cliente_id }}>{{ c.nome }}</option>{% endfor %}</select></form>
+<a class="lnk" href="{{ url_for('tarefas', ver=ver, feitas=None if feitas else 1, cliente=cliente_id) }}">{{ 'Esconder concluídas' if feitas else 'Mostrar concluídas' }}</a>
+</div>
+
+{% for nome, itens in grupos.items() %}
+<section class="grupo">
+<div class="grupo-h"><div class="av">{{ nome[:1]|upper }}</div><h3>{{ nome }}</h3>
+<span class="cnt">{{ itens|rejectattr('status','eq','feito')|list|length }} em aberto</span></div>
+{% for t in itens %}
+<div class="task {{ t.status }}">
+<form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
 <input type="hidden" name="status" value="{{ 'a_fazer' if t.status=='feito' else 'feito' }}">
-<input type="checkbox" style="width:auto" onchange="this.form.submit()" {{ 'checked' if t.status=='feito' }} title="Concluir"></form></td>
-<td>{% if t.status=='feito' %}<s>{{ t.descricao }}</s>{% else %}{{ t.descricao }}{% endif %}
-<br><span class="mut">{{ t.responsavel or '—' }}{% if not t.minha %} · do cliente/terceiros{% endif %}
-{% if t.origem_ata %} · <a href="{{ url_for('ver_ata', event_id=t.origem_ata) }}">{{ t.origem_titulo or 'reunião' }}</a>{% endif %}</span></td>
-<td style="width:150px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
-<input type="date" name="prazo" value="{{ t.prazo or '' }}" onchange="this.form.submit()"
-style="{{ 'border-color:#d93025;color:#d93025;font-weight:600' if t.atrasada }}"></form></td>
-<td style="width:120px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
-<select name="status" onchange="this.form.submit()" style="padding:6px">
+<input type="checkbox" class="chk" onchange="this.form.submit()" {{ 'checked' if t.status=='feito' }} title="{{ 'Reabrir' if t.status=='feito' else 'Concluir' }}"></form>
+<div><div class="t-txt">{{ t.descricao }}</div>
+<div class="t-meta">
+<span class="pill">{{ t.responsavel or 'Sem responsável' }}</span>
+{% if not t.minha %}<span class="pill cli">Com o cliente</span>{% endif %}
+{% if t.origem_ata %}<a class="pill" href="{{ url_for('ver_ata', event_id=t.origem_ata) }}" title="Ver a ata">↗ {{ t.origem_titulo or 'reunião' }}</a>{% endif %}
+</div></div>
+<form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}" class="due" title="Mudar o prazo">
+{% if t.prazo %}{% set d = t.dias %}
+<span class="{{ 'atr' if t.atrasada else ('hj' if d == 0 else '') }}">
+{% if t.status == 'feito' %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}
+{% elif d < -1 %}Atrasada {{ -d }} dias{% elif d == -1 %}Venceu ontem{% elif d == 0 %}Hoje{% elif d == 1 %}Amanhã
+{% elif d <= 6 %}Em {{ d }} dias{% else %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% endif %}</span>
+{% else %}<span class="sem">+ prazo</span>{% endif %}
+<input type="date" name="prazo" value="{{ t.prazo or '' }}" onchange="this.form.submit()"></form>
+<form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}" class="stw">
+<select name="status" class="st {{ t.status }}" onchange="this.form.submit()">
 {% for s, rot in [('a_fazer','A fazer'),('fazendo','Fazendo'),('feito','Feito')] %}<option value="{{ s }}" {{ 'selected' if t.status==s }}>{{ rot }}</option>{% endfor %}
-</select></form></td>
-<td style="width:30px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}" onsubmit="return confirm('Excluir esta tarefa?')">
-<input type="hidden" name="excluir" value="1"><button class="sec" style="padding:2px 8px" title="Excluir">×</button></form></td>
-</tr>{% endfor %}</table></div>
-{% else %}<p class="mut">Nenhuma tarefa aqui. As ações das atas entram sozinhas nesta lista.</p>{% endfor %}
+</select></form>
+<form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}" onsubmit="return confirm('Excluir esta tarefa?')">
+<input type="hidden" name="excluir" value="1"><button class="del" title="Excluir">×</button></form>
+</div>
+{% endfor %}
+</section>
+{% else %}
+<div class="grupo vazio"><b>{{ 'Nada pendente por aqui' if not feitas else 'Nenhuma tarefa' }}</b>
+As ações combinadas nas reuniões entram sozinhas nesta lista quando a ata é gerada.</div>
+{% endfor %}
 
-<h2>Nova tarefa</h2>
-<form method="post" action="{{ url_for('tarefa_nova') }}" class="card">
-<p><input name="descricao" placeholder="O que precisa ser feito" required></p>
-<div class="row" style="justify-content:flex-start">{{ seletor_cliente(cliente_id)|safe }}
-<input name="responsavel" value="{{ seu_nome }}" placeholder="Responsável" style="width:160px">
-<input type="date" name="prazo" style="width:160px">
-<label><input type="checkbox" name="minha" value="1" checked style="width:auto"> é minha</label>
-<button>Adicionar</button></div></form>
+<details class="novo"><summary>+ Nova tarefa</summary>
+<form method="post" action="{{ url_for('tarefa_nova') }}">
+<input class="full" name="descricao" placeholder="O que precisa ser feito" required>
+<div>{{ seletor_cliente(cliente_id)|safe }}</div>
+<input name="responsavel" value="{{ seu_nome }}" placeholder="Responsável">
+<input type="date" name="prazo">
+<label class="mut" style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="minha" value="1" checked style="width:auto"> É minha (eu ou minha equipe)</label>
+<div class="full"><button>Adicionar tarefa</button></div>
+</form></details>
 
-<h2>Clientes</h2>
-<div class="card">{% for c in clientes %}<form method="post" action="{{ url_for('cliente_renomear', cliente_id=c.id) }}" class="row" style="justify-content:flex-start;margin:4px 0">
-<input name="nome" value="{{ c.nome }}" style="width:260px"><button class="sec">Renomear</button>
-<a href="{{ url_for('tarefas', ver='todas', cliente=c.id) }}">ver tarefas</a></form>{% else %}<p class="mut">Nenhum cliente ainda.</p>{% endfor %}
-<form method="post" action="{{ url_for('cliente_novo') }}" class="row" style="justify-content:flex-start;margin-top:10px">
-<input name="nome" placeholder="Novo cliente" required style="width:260px"><button>Cadastrar</button></form></div>""",
+<details class="novo"><summary>Clientes ({{ clientes|length }})</summary>
+<div style="padding:0 16px 16px">
+{% for c in clientes %}<form method="post" action="{{ url_for('cliente_renomear', cliente_id=c.id) }}" class="row" style="justify-content:flex-start;margin:6px 0;flex-wrap:nowrap">
+<div class="av">{{ c.nome[:1]|upper }}</div><input name="nome" value="{{ c.nome }}"><button class="sec">Renomear</button>
+<a class="btn sec" href="{{ url_for('tarefas', ver='todas', cliente=c.id) }}">Tarefas</a></form>{% else %}<p class="mut">Nenhum cliente ainda.</p>{% endfor %}
+<form method="post" action="{{ url_for('cliente_novo') }}" class="row" style="justify-content:flex-start;margin-top:12px;flex-wrap:nowrap">
+<input name="nome" placeholder="Nome do novo cliente" required><button>Cadastrar</button></form></div></details>""",
         nova=nova, grupos=grupos, abertas=abertas, ver=ver, feitas=feitas, cliente_id=cliente_id, clientes=db.clientes(),
         seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME,
     )
@@ -782,6 +974,7 @@ if __name__ == "__main__":
         if config.GRAVACAO_AUTOMATICA:
             monitor.iniciar(ao_detectar_meet, ao_encerrar_meet, lambda: GRAVADOR.ativo and GRAVADOR.automatica)
             print("[monitor] vigiando chamadas do Meet")
+        sincronia.iniciar_automatico()
         # Deixa os modelos de voz prontos antes da primeira reunião
         threading.Thread(target=lambda: [gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO),
                                          gravador.carregar_modelo()], daemon=True).start()

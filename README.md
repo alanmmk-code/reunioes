@@ -103,6 +103,34 @@ As ações de cada ata viram tarefas do cliente da reunião. A tela **Tarefas** 
 
 Os dados ficam em `dados.db` (SQLite, local, fora do Git).
 
+### Usar em mais de um PC
+
+O **código** fica no GitHub e os **dados** (atas, tarefas, clientes, gravações) ficam no seu **Google Drive**,
+na pasta **"Reuniões - dados do app"**. Os dados nunca vão para o GitHub (o repositório é público).
+
+**Instalar em outro PC:**
+
+```powershell
+git clone https://github.com/alanmmk-code/reunioes C:\Orca\Reunioes
+cd C:\Orca\Reunioes
+powershell -ExecutionPolicy Bypass -File instalar.ps1
+```
+
+O instalador configura o Python, pede o seu nome, pega a credencial do Google que ficou no Drive,
+faz o login, confere o Claude Code, traz todos os seus dados do Drive e cria os atalhos.
+
+**Atualizar o código** (quando houver mudanças no GitHub): `git pull` e reabra o painel.
+
+**Sincronização dos dados** (automática: ao abrir, a cada 5 minutos e logo depois de cada alteração;
+ou pelo botão **Sincronizar** no topo do painel):
+
+- Tarefas e clientes são mesclados **registro a registro**: se você concluiu uma tarefa num PC e criou outra
+  no outro, as duas mudanças ficam. Se a mesma tarefa foi alterada nos dois, vale a alteração mais recente.
+  Um cliente criado com o mesmo nome nos dois PCs vira um só.
+- Atas e gravações pendentes: vale a versão mais recente.
+- **Áudios não vão para o Drive por padrão** (cerca de 230 MB por hora). Se a ata for gerada em outro PC,
+  ele usa a transcrição feita ao vivo. Para enviar os áudios também: `SINCRONIZAR_AUDIO=sim` no `.env`.
+
 ### Abrir junto com o Windows
 
 Já configurado: o atalho `Assistente de Reunioes` na pasta Inicializar do Windows (`Win+R` → `shell:startup`)

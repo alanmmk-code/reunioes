@@ -19,12 +19,15 @@ PORTA = int(os.getenv("PORTA", "5055"))
 CREDENTIALS_FILE = BASE_DIR / "credentials.json"  # baixado do Google Cloud Console
 TOKEN_FILE = BASE_DIR / "token.json"  # gerado no primeiro login
 
+# Dados locais (atas, gravações, banco de tarefas). São sincronizados pelo Google Drive, não pelo Git.
+DADOS_DIR = BASE_DIR
+
 # Onde as atas geradas ficam salvas localmente
-ATAS_DIR = BASE_DIR / "atas"
+ATAS_DIR = DADOS_DIR / "atas"
 ATAS_DIR.mkdir(exist_ok=True)
 
 # Gravação local + transcrição com Whisper (para contas sem transcrição do Meet)
-GRAVACOES_DIR = BASE_DIR / "gravacoes"
+GRAVACOES_DIR = DADOS_DIR / "gravacoes"
 GRAVACOES_DIR.mkdir(exist_ok=True)
 WHISPER_MODELO = os.getenv("WHISPER_MODELO", "small")  # tiny, base, small, medium, large-v3-turbo
 WHISPER_MODELO_AO_VIVO = os.getenv("WHISPER_MODELO_AO_VIVO", "base")  # rápido, para as sugestões
@@ -43,3 +46,9 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",  # enviar a ata por e-mail
     "https://www.googleapis.com/auth/meetings.space.readonly",  # transcrições via API do Meet
 ]
+
+# Sincronização dos dados entre PCs pelo Google Drive
+SINCRONIZAR = os.getenv("SINCRONIZAR", "sim").lower() in ("sim", "s", "true", "1")
+# Enviar também os áudios (grandes: ~230 MB por hora de reunião). Sem isso, só textos e atas vão para o Drive.
+SINCRONIZAR_AUDIO = os.getenv("SINCRONIZAR_AUDIO", "nao").lower() in ("sim", "s", "true", "1")
+PASTA_DRIVE = os.getenv("PASTA_DRIVE", "Reuniões - dados do app")
