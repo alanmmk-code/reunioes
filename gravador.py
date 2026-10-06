@@ -124,6 +124,65 @@ def _ler_wav(caminho) -> np.ndarray:
     return np.frombuffer(bruto, dtype="<i2").astype(np.float32) / 32768.0
 
 
+def ajustar_volume(audio: np.ndarray, janela_seg: int = 30) -> np.ndarray:
+    """Deixa a fala num volume bom para o Whisper. Microfone baixo faz o modelo "inventar" frases.
+    Ajusta por janelas (um barulho alto num ponto não abafa o resto) e não amplifica silêncio."""
+    audio = np.asarray(audio, dtype=np.float32)
+    saida = audio.copy()
+    passo = TAXA * janela_seg
+    for i in range(0, len(audio), passo):
+        trecho = audio[i:i + passo]
+        if not len(trecho):
+            continue
+        pico = float(np.percentile(np.abs(trecho), 99.5))  # ignora estalos isolados
+        if pico < 0.03:  # só ruído de fundo: amplificar faria o Whisper "ouvir" frases no chiado
+            continue
+        saida[i:i + passo] = np.clip(trecho * min(0.9 / pico, 6.0), -1.0, 1.0)
+    return saida
+
+
+def prompt_contexto(reuniao: dict | None) -> str:
+    """Só uma lista de nomes (pessoas e clientes) para o Whisper acertar a grafia.
+    Frases completas no contexto fazem o modelo repeti-las quando há ruído."""
+    import db
+
+    reuniao = reuniao or {}
+    nomes = [config.SEU_NOME] if config.SEU_NOME and config.SEU_NOME != "Eu" else []
+    nomes += [p.get("nome") for p in reuniao.get("participantes", []) if p.get("nome")]
+    cli = db.cliente(reuniao.get("cliente_id"))
+    if cli:
+        nomes.append(cli["nome"])
+    nomes += [c["nome"] for c in db.clientes()][:25]
+    nomes = list(dict.fromkeys(n.strip() for n in nomes if n and n.strip()))
+    return (", ".join(nomes) + ".")[:500] if nomes else ""
+
+
+def segmento_confiavel(seg) -> bool:
+    """Descarta o que o próprio Whisper indica como provável invenção (alucinação)."""
+    if getattr(seg, "compression_ratio", 0) > 2.4:  # frase repetida em looping
+        return False
+    if getattr(seg, "no_speech_prob", 0) > 0.6 and getattr(seg, "avg_logprob", 0) < -1.0:
+        return False
+    return getattr(seg, "avg_logprob", 0) > -1.5
+
+
+def transcrever_audio(modelo, audio: np.ndarray, prompt: str = "", beam_size: int = 5):
+    """Transcreve com volume ajustado, contexto e filtro de alucinação. Gera (inicio, fim, texto)."""
+    segmentos, info = modelo.transcribe(
+        ajustar_volume(audio), language="pt", vad_filter=True, beam_size=beam_size,
+        condition_on_previous_text=False, initial_prompt=prompt or None,
+    )
+    palavras_prompt = _palavras(prompt or "")
+    anterior = None
+    for seg in segmentos:
+        texto = seg.text.strip()
+        palavras = _palavras(texto)
+        copia_do_prompt = palavras_prompt and len(palavras) >= 2 and len(palavras & palavras_prompt) / len(palavras) >= 0.8
+        if texto and segmento_confiavel(seg) and texto != anterior and not copia_do_prompt:
+            anterior = texto
+            yield seg.start, seg.end, texto, info
+
+
 def _palavras(texto: str) -> set[str]:
     return {p.strip(".,;:!?\"'()").lower() for p in texto.split()} - {""}
 
@@ -142,23 +201,19 @@ def _eco(seg_mic, segs_chamada, folga=3.0, limite=0.6) -> bool:
     return len(palavras & proximas) / len(palavras) >= limite
 
 
-def transcrever(arquivos: dict, progresso=lambda pct: None) -> str:
+def transcrever(arquivos: dict, progresso=lambda pct: None, reuniao: dict | None = None) -> str:
     """Transcreve as trilhas e intercala as falas em ordem de tempo."""
     modelo = carregar_modelo()
     rotulos = {"voce": config.SEU_NOME, "outros": "Outros participantes"}
+    prompt = prompt_contexto(reuniao)
     por_trilha = {}
     trilhas = [(n, c) for n, c in arquivos.items() if c.exists() and c.stat().st_size > 44]
     for i, (nome, caminho) in enumerate(trilhas):
-        segmentos, info = modelo.transcribe(
-            _ler_wav(caminho), language="pt", vad_filter=True, beam_size=5, condition_on_previous_text=False
-        )
         por_trilha[nome] = []
-        for seg in segmentos:
-            texto = seg.text.strip()
-            if texto:
-                por_trilha[nome].append((seg.start, seg.end, texto))
+        for inicio, fim, texto, info in transcrever_audio(modelo, _ler_wav(caminho), prompt):
+            por_trilha[nome].append((inicio, fim, texto))
             if info.duration:
-                progresso(int(100 * (i + min(seg.end / info.duration, 1)) / len(trilhas)))
+                progresso(int(100 * (i + min(fim / info.duration, 1)) / len(trilhas)))
 
     outros = por_trilha.get("outros", [])
     voce = [s for s in por_trilha.get("voce", []) if not _eco(s, outros)]

@@ -119,6 +119,10 @@ def info_da_janela(titulo: str) -> tuple[str | None, str]:
     codigo = CODIGO_MEET.search(titulo)
     m = TITULO_MEET.search(titulo)
     nome = m.group(1).split(" - ")[0].strip() if m else "Reunião do Meet"
+    # Sem nome de reunião no título, sobra só o nome do navegador ("Meet - Google Chrome")
+    navegadores = ("google chrome", "microsoft edge", "microsoft​ edge", "mozilla firefox", "brave", "opera", "vivaldi")
+    if not nome or nome.lower().replace("​", "") in navegadores:
+        nome = "Reunião do Meet"
     return (codigo.group(0) if codigo else None), nome
 
 

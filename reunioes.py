@@ -134,7 +134,7 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
     TAREFA.update(ativa=True, etapa="Transcrevendo o áudio", pct=0, erro=None, transcricao_salva=None,
                   event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
     try:
-        texto = gravador.transcrever(arquivos, progresso=lambda p: TAREFA.update(pct=p))
+        texto = gravador.transcrever(arquivos, progresso=lambda p: TAREFA.update(pct=p), reuniao=reuniao)
         if not texto:
             raise RuntimeError("Nenhuma fala foi reconhecida no áudio gravado.")
         # Guarda a transcrição antes de chamar o Claude, para não perdê-la se algo falhar
@@ -212,6 +212,7 @@ def iniciar_gravacao(reuniao: dict, automatica: bool) -> None:
 # ---------------------------------------------------------------- Janelinha de sugestões
 
 JANELA = {"processo": None, "fechada_pelo_usuario": False}
+_janela_lock = threading.Lock()
 
 
 def janela_aberta() -> bool:
@@ -221,6 +222,11 @@ def janela_aberta() -> bool:
 
 def abrir_janela() -> None:
     """Abre a janelinha (pergunta o cliente e mostra as sugestões), se ainda não estiver aberta."""
+    with _janela_lock:  # o vigia e o início da gravação podem chamar ao mesmo tempo
+        _abrir_janela()
+
+
+def _abrir_janela() -> None:
     if janela_aberta():
         return
     pythonw = config.BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
@@ -1281,6 +1287,7 @@ if __name__ == "__main__":
             lembretes.iniciar(sugerir_cliente)
         # Deixa os modelos de voz prontos antes da primeira reunião
         threading.Thread(target=lambda: [gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO),
+                                         gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO_OUTROS),
                                          gravador.carregar_modelo()], daemon=True).start()
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         app.run(port=config.PORTA, debug=False)

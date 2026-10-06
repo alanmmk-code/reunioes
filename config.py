@@ -30,7 +30,8 @@ ATAS_DIR.mkdir(exist_ok=True)
 GRAVACOES_DIR = DADOS_DIR / "gravacoes"
 GRAVACOES_DIR.mkdir(exist_ok=True)
 WHISPER_MODELO = os.getenv("WHISPER_MODELO", "small")  # tiny, base, small, medium, large-v3-turbo
-WHISPER_MODELO_AO_VIVO = os.getenv("WHISPER_MODELO_AO_VIVO", "base")  # rápido, para as sugestões
+WHISPER_MODELO_AO_VIVO = os.getenv("WHISPER_MODELO_AO_VIVO", "base")  # seu microfone, ao vivo (rápido)
+WHISPER_MODELO_AO_VIVO_OUTROS = os.getenv("WHISPER_MODELO_AO_VIVO_OUTROS", "small")  # os outros, ao vivo
 SEU_NOME = os.getenv("SEU_NOME", "Eu")
 # Gravar sozinho quando uma chamada do Meet for detectada no navegador
 GRAVACAO_AUTOMATICA = os.getenv("GRAVACAO_AUTOMATICA", "sim").lower() in ("sim", "s", "true", "1")

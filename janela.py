@@ -9,7 +9,6 @@ import json
 import threading
 import tkinter as tk
 import urllib.request
-from tkinter import ttk
 
 import config
 
@@ -31,7 +30,7 @@ class Janela:
         self.root.title("Assistente da reunião")
         self.root.configure(bg=CORES["fundo"])
         self.root.attributes("-topmost", True)
-        largura, altura = 400, 600
+        largura, altura = 400, 680
         x = self.root.winfo_screenwidth() - largura - 16
         y = self.root.winfo_screenheight() - altura - 72
         self.root.geometry(f"{largura}x{altura}+{x}+{y}")
@@ -45,10 +44,22 @@ class Janela:
         self.quadro_cliente = tk.Frame(self.root, bg=CORES["card"], padx=10, pady=8)
         tk.Label(self.quadro_cliente, text="Qual cliente é esta reunião?", bg=CORES["card"], fg=CORES["texto"],
                  font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x")
-        self.combo = ttk.Combobox(self.quadro_cliente, font=("Segoe UI", 10))
-        self.combo.pack(fill="x", pady=6)
-        tk.Label(self.quadro_cliente, text="Escolha na lista ou digite o nome de um cliente novo.", bg=CORES["card"],
-                 fg=CORES["mut"], font=("Segoe UI", 8), anchor="w").pack(fill="x")
+        # Lista sempre visível (um "combobox" abriria a lista atrás desta janela, que fica sempre por cima)
+        self.busca = tk.Entry(self.quadro_cliente, font=("Segoe UI", 10), bg=CORES["fundo"], fg=CORES["texto"],
+                              insertbackground=CORES["texto"], relief="flat")
+        self.busca.pack(fill="x", pady=(6, 4), ipady=4)
+        self.busca.bind("<KeyRelease>", lambda _: self._filtrar())
+        self.busca.bind("<Return>", lambda _: self.confirmar_cliente())
+        self.lista = tk.Listbox(self.quadro_cliente, height=5, font=("Segoe UI", 10), activestyle="none",
+                                bg=CORES["fundo"], fg=CORES["texto"], selectbackground=CORES["azul"],
+                                selectforeground="#14171c", relief="flat", highlightthickness=0, exportselection=False)
+        self.lista.pack(fill="x")
+        self.lista.bind("<Double-Button-1>", lambda _: self.confirmar_cliente())
+        self.dica = tk.Label(self.quadro_cliente, text="Clique no cliente e em Confirmar, ou digite para buscar ou criar um novo.",
+                             bg=CORES["card"], fg=CORES["mut"], font=("Segoe UI", 8), anchor="w", justify="left", wraplength=340)
+        self.dica.pack(fill="x", pady=(4, 0))
+        self._nomes = []
+        self._sugerido = None
         linha = tk.Frame(self.quadro_cliente, bg=CORES["card"])
         linha.pack(fill="x", pady=(6, 0))
         tk.Button(linha, text="Confirmar", command=self.confirmar_cliente, bg=CORES["azul"], fg="#14171c",
@@ -106,14 +117,39 @@ class Janela:
             self.quadro_cliente.pack(fill="x", padx=12, pady=6, after=self.status)
             self.root.attributes("-topmost", True)
             self.root.lift()
-            self.combo.focus_set()
+            self.busca.delete(0, "end")
+            self._filtrar(selecionar=self._sugerido)
+            self.busca.focus_set()
         else:
             self.quadro_cliente.pack_forget()
             self.rotulo_cliente.pack(fill="x", padx=12, after=self.status)
 
+    def _filtrar(self, selecionar: str | None = None):
+        """Mostra os clientes que contêm o texto digitado."""
+        texto = self.busca.get().strip().lower()
+        visiveis = [n for n in self._nomes if texto in n.lower()]
+        self.lista.delete(0, "end")
+        for nome in visiveis:
+            self.lista.insert("end", nome)
+        alvo = selecionar if selecionar in visiveis else (visiveis[0] if texto and visiveis else None)
+        if alvo:
+            i = visiveis.index(alvo)
+            self.lista.selection_set(i)
+            self.lista.see(i)
+        if texto and texto not in [n.lower() for n in visiveis]:
+            self.dica.configure(text=f"Enter para criar o cliente novo \"{self.busca.get().strip()}\"" if not visiveis
+                                else "Clique no cliente, ou aperte Enter para usar o primeiro da lista.")
+        else:
+            self.dica.configure(text="Clique no cliente e em Confirmar, ou digite para buscar ou criar um novo.")
+
     def confirmar_cliente(self):
-        nome = self.combo.get().strip()
+        selecionado = self.lista.curselection()
+        if selecionado:
+            nome = self.lista.get(selecionado[0])
+        else:
+            nome = self.busca.get().strip()
         if not nome:
+            self.dica.configure(text="Escolha um cliente na lista (ou clique em Sem cliente).")
             return
         cid = self._clientes.get(nome.lower())
         self.enviar_cliente({"cliente_id": cid} if cid else {"novo": nome})
@@ -130,12 +166,12 @@ class Janela:
     def _atualizar_cliente(self, e):
         nomes = [c["nome"] for c in e.get("clientes", [])]
         self._clientes = {c["nome"].lower(): c["id"] for c in e.get("clientes", [])}
-        if list(self.combo["values"]) != nomes:
-            self.combo["values"] = nomes
+        self._sugerido = next((c["nome"] for c in e.get("clientes", []) if c["id"] == e.get("cliente_sugerido")), None)
+        if nomes != self._nomes:
+            self._nomes = nomes
+            atual = self.lista.get(self.lista.curselection()[0]) if self.lista.curselection() else self._sugerido
+            self._filtrar(selecionar=atual)
         if not e.get("cliente_definido") or self._trocando:
-            if self._perguntando is not True:
-                sugerido = next((c["nome"] for c in e.get("clientes", []) if c["id"] == e.get("cliente_sugerido")), "")
-                self.combo.set(sugerido)
             self.mostrar_pergunta(True)
         else:
             self.mostrar_pergunta(False)

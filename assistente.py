@@ -98,6 +98,7 @@ class AoVivo:
         self._ultima_auto = 0.0
         self._novidade_outros = False
         self._contexto = _contexto(reuniao)
+        self._prompt = gravador.prompt_contexto(reuniao)
         # Pela assinatura (Claude Code) cada consulta é mais lenta e gasta cota do plano:
         # sugere sozinho só quando parece haver pergunta ou o seu nome, e com mais espaço entre consultas
         self._so_com_gatilho = config.IA_MODO != "api"
@@ -123,9 +124,11 @@ class AoVivo:
     def atualizar_contexto(self):
         """Chamado quando o cliente é escolhido: inclui as tarefas e atas desse cliente."""
         self._contexto = _contexto(self.reuniao)
+        self._prompt = gravador.prompt_contexto(self.reuniao)
 
     def _loop(self):
         gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO)
+        gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO_OUTROS)
         while not self._parar.is_set():
             try:
                 for nome in ("outros", "voce"):
@@ -158,14 +161,13 @@ class AoVivo:
         self._offset[nome] += dur
         if np.sqrt(np.mean(buf ** 2)) < SILENCIO:
             return  # trecho todo em silêncio
-        segs, _ = gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO).transcribe(
-            buf, language="pt", vad_filter=True, beam_size=1, condition_on_previous_text=False
-        )
-        for s in segs:
-            texto = s.text.strip()
-            if not texto:
-                continue
-            seg = (inicio + s.start, inicio + s.end, texto)
+        # os outros participantes (o que importa para as sugestões) com o modelo mais preciso;
+        # o seu microfone com o rápido, para não pesar o PC durante a chamada
+        modelo = gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO_OUTROS if nome == "outros"
+                                          else config.WHISPER_MODELO_AO_VIVO)
+        # volume ajustado + contexto + filtro de alucinação (ver gravador.transcrever_audio)
+        for s_ini, s_fim, texto, _ in gravador.transcrever_audio(modelo, buf, self._prompt, beam_size=2):
+            seg = (inicio + s_ini, inicio + s_fim, texto)
             if nome == "outros":
                 self._segs_outros.append(seg)
                 if not self._so_com_gatilho or self._parece_dirigido(texto):
