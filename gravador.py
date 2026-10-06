@@ -33,6 +33,48 @@ def carregar_modelo(nome: str | None = None):
     return _modelos[nome]
 
 
+def _float_estendido(formato):
+    """Microfones que anunciam float32 simples (WAVE_FORMAT_IEEE_FLOAT, 18 bytes) quebram o soundcard,
+    que só aceita WAVEFORMATEXTENSIBLE. Troca pelo mesmo float32 no formato estendido (layout do Windows)."""
+    from soundcard.mediafoundation import _ffi, _ole32
+
+    if formato[0].Format.wFormatTag != 0x3 or formato[0].Format.wBitsPerSample != 32:
+        return formato
+    novo = _ffi.cast("unsigned char*", _ole32.CoTaskMemAlloc(44))
+    _ffi.memmove(novo, formato, 18)
+    guid_float = [3, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xAA, 0, 0x38, 0x9B, 0x71]
+    estendido = [0xFE, 0xFF] + list(novo[2:16]) + [22, 0, 32, 0, 3, 0, 0, 0] + guid_float + [0] * 4
+    for i, byte in enumerate(estendido):
+        novo[i] = byte
+    _ole32.CoTaskMemFree(formato)
+    return _ffi.cast("WAVEFORMATEXTENSIBLE*", novo)
+
+
+def _corrigir_soundcard() -> None:
+    """Aplica _float_estendido logo depois do GetMixFormat do soundcard (Windows). Se a biblioteca
+    mudar e o trecho não for encontrado, não faz nada."""
+    import inspect
+    import sys
+    import textwrap
+
+    if sys.platform != "win32":
+        return
+    from soundcard import mediafoundation as mf
+
+    if getattr(mf._Recorder.__init__, "_corrigido", False):
+        return
+    fonte = textwrap.dedent(inspect.getsource(mf._Recorder.__init__))
+    ancora = "hr = self._ptr[0][0].lpVtbl.GetMixFormat(self._ptr[0], ppMixFormat)\n    _com.check_error(hr)\n"
+    if fonte.count(ancora) != 1:
+        print("[gravador] soundcard mudou; correção de formato do microfone não aplicada")
+        return
+    fonte = fonte.replace(ancora, ancora + "    ppMixFormat[0] = _float_estendido(ppMixFormat[0])\n")
+    espaco = {}
+    exec(fonte, {**vars(mf), "_float_estendido": _float_estendido}, espaco)
+    espaco["__init__"]._corrigido = True
+    mf._Recorder.__init__ = espaco["__init__"]
+
+
 def _microfone(parte_do_nome: str):
     """Microfone cujo nome contém o texto (ex.: "Realtek"), ou None."""
     import soundcard as sc
@@ -71,6 +113,7 @@ class _Trilha(threading.Thread):
                             time.sleep(0.01)
         except Exception as e:
             self.erro = e
+            print(f"[gravador] trilha {self.caminho.name} falhou: {e!r}")
 
     def consumir(self) -> np.ndarray:
         with self._lock:
@@ -92,6 +135,7 @@ class Gravador:
     def iniciar(self, reuniao: dict) -> None:
         import soundcard as sc
 
+        _corrigir_soundcard()
         if self.ativo:
             raise RuntimeError("Já existe uma gravação em andamento.")
         base = config.GRAVACOES_DIR / f"{datetime.now():%Y%m%d-%H%M%S}-{reuniao['id'][:20]}"
