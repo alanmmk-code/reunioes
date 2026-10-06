@@ -52,7 +52,46 @@ def janela_meet() -> str | None:
 
 
 def navegador_usando_microfone() -> bool:
-    """O Windows registra LastUsedTimeStop = 0 enquanto um app está usando o microfone."""
+    """True se algum navegador está captando o microfone agora."""
+    try:
+        return _microfone_por_sessao_de_audio()
+    except Exception:
+        return _microfone_pelo_registro()
+
+
+def _microfone_por_sessao_de_audio() -> bool:
+    """Pergunta ao sistema de áudio do Windows quais programas estão com o microfone aberto
+    (a mesma informação do mixer de volume). É o método mais confiável."""
+    import comtypes
+    import psutil
+    from comtypes import CLSCTX_ALL
+    from pycaw.constants import CLSID_MMDeviceEnumerator
+    from pycaw.pycaw import IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator
+
+    comtypes.CoInitialize()
+    try:
+        enum = comtypes.CoCreateInstance(CLSID_MMDeviceEnumerator, IMMDeviceEnumerator, CLSCTX_ALL)
+        microfones = enum.EnumAudioEndpoints(1, 1)  # captura, só os ativos
+        for i in range(microfones.GetCount()):
+            mgr = microfones.Item(i).Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
+            sessoes = mgr.QueryInterface(IAudioSessionManager2).GetSessionEnumerator()
+            for j in range(sessoes.GetCount()):
+                s = sessoes.GetSession(j).QueryInterface(IAudioSessionControl2)
+                if s.GetState() != 1:  # 1 = ativa
+                    continue
+                try:
+                    if psutil.Process(s.GetProcessId()).name().lower() in NAVEGADORES:
+                        return True
+                except psutil.Error:
+                    continue
+        return False
+    finally:
+        comtypes.CoUninitialize()
+
+
+def _microfone_pelo_registro() -> bool:
+    """Plano B: o Windows registra LastUsedTimeStop = 0 enquanto um app está usando o microfone
+    (em algumas versões do Windows esse registro não é atualizado)."""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, CHAVE_MIC) as chave:
             i = 0

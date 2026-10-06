@@ -65,7 +65,8 @@ a.stat:hover{border-color:var(--pri)}
 <div class="pn-head"><div><h1>{{ saudacao }}</h1><p>{{ hoje_txt }}</p></div></div>
 
 {% if gravando %}<div class="alerta rec"><b>● Gravando agora{% if titulo_gravacao %}: {{ titulo_gravacao }}{% endif %}</b>
-<a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></div>
+<span><form class="inline" method="post" action="/api/janela/abrir"><input type="hidden" name="x" value="1"><button class="sec">Mostrar janela</button></form>
+<a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></span></div>
 {% elif tarefa.ativa %}<div class="alerta pend"><b>⏳ Gerando ata: {{ tarefa.etapa }}{% if tarefa.etapa.startswith('Transcrevendo') %} ({{ tarefa.pct }}%){% endif %}</b>
 <a class="btn sec" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
 {% for p in pendentes %}<div class="alerta pend"><b>Gravação aguardando decisão: {{ p.reuniao.titulo }} · {{ p.minutos }} min</b>

@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import webbrowser
 from datetime import date, datetime, timedelta
@@ -197,10 +198,64 @@ def iniciar_gravacao(reuniao: dict, automatica: bool) -> None:
     if config.ASSISTENTE_AO_VIVO:
         AO_VIVO = assistente.AoVivo(GRAVADOR, reuniao)
         AO_VIVO.iniciar()
-    # A janelinha pergunta o cliente e mostra as sugestões
+    JANELA["fechada_pelo_usuario"] = False
+    abrir_janela()
+
+
+# ---------------------------------------------------------------- Janelinha de sugestões
+
+JANELA = {"processo": None, "fechada_pelo_usuario": False}
+
+
+def janela_aberta() -> bool:
+    p = JANELA["processo"]
+    return p is not None and p.poll() is None
+
+
+def abrir_janela() -> None:
+    """Abre a janelinha (pergunta o cliente e mostra as sugestões), se ainda não estiver aberta."""
+    if janela_aberta():
+        return
     pythonw = config.BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
-    subprocess.Popen([str(pythonw if pythonw.exists() else sys.executable), str(config.BASE_DIR / "janela.py")],
-                     cwd=str(config.BASE_DIR))
+    log = open(config.BASE_DIR / "janela.log", "a", encoding="utf-8")
+    log.write(f"\n--- {datetime.now():%d/%m %H:%M:%S} abrindo a janela\n")
+    log.flush()
+    JANELA["processo"] = subprocess.Popen(
+        [str(pythonw if pythonw.exists() else sys.executable), "-X", "faulthandler", str(config.BASE_DIR / "janela.py")],
+        cwd=str(config.BASE_DIR), stdout=log, stderr=log,
+    )
+
+    def registrar_saida(processo=JANELA["processo"]):
+        codigo = processo.wait()
+        print(f"[janela] fechou (código {codigo}; fechada pelo usuário: {JANELA['fechada_pelo_usuario']})")
+    threading.Thread(target=registrar_saida, daemon=True).start()
+
+
+def vigiar_janela() -> None:
+    """Durante a gravação, reabre a janela se ela fechar sozinha (não se você a fechou)."""
+    def loop():
+        while True:
+            time.sleep(5)
+            try:
+                if GRAVADOR.ativo and not JANELA["fechada_pelo_usuario"] and not janela_aberta():
+                    print("[janela] não estava aberta durante a gravação; reabrindo")
+                    abrir_janela()
+            except Exception:
+                traceback.print_exc()
+    threading.Thread(target=loop, daemon=True, name="vigia-janela").start()
+
+
+@app.post("/api/janela/fechada")
+def api_janela_fechada():
+    JANELA["fechada_pelo_usuario"] = True
+    return {"ok": True}
+
+
+@app.post("/api/janela/abrir")
+def api_janela_abrir():
+    JANELA["fechada_pelo_usuario"] = False
+    abrir_janela()
+    return redirect(request.referrer or url_for("inicio")) if request.form or not request.is_json else {"ok": True}
 
 
 def definir_cliente_da_gravacao(cliente_id) -> None:
@@ -1059,6 +1114,7 @@ if __name__ == "__main__":
         if config.GRAVACAO_AUTOMATICA:
             monitor.iniciar(ao_detectar_meet, ao_encerrar_meet, lambda: GRAVADOR.ativo and GRAVADOR.automatica)
             print("[monitor] vigiando chamadas do Meet")
+        vigiar_janela()
         sincronia.iniciar_automatico()
         if config.LEMBRETES:
             lembretes.iniciar(sugerir_cliente)

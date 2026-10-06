@@ -78,8 +78,14 @@ class Janela:
         self.conversa.pack(fill="x", padx=12, pady=(0, 10))
 
         self._ultimo = None
+        self.root.protocol("WM_DELETE_WINDOW", self.fechar)
         self.root.after(300, self._esconder_de_captura)
         self.root.after(500, self.atualizar)
+
+    def fechar(self):
+        """Fechada por você: avisa o painel para não reabrir sozinha nesta reunião."""
+        self._tentar(lambda: api("/api/janela/fechada", "POST"))
+        self.root.destroy()
 
     def _esconder_de_captura(self):
         try:
