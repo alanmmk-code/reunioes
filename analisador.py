@@ -17,6 +17,11 @@ class Acao(BaseModel):
     tarefa: str
     responsavel: str = Field(description="Nome de quem ficou responsável; 'A definir' se ninguém assumiu")
     prazo: str = Field(description="Prazo no formato AAAA-MM-DD quando dito ou dedutível; senão 'A definir'")
+    do_usuario: bool = Field(
+        default=True,
+        description="True se a tarefa cabe ao usuário (dono desta ferramenta) ou à empresa/equipe dele; "
+        "False se cabe ao cliente ou a terceiros"
+    )
 
 
 class ProximaReuniao(BaseModel):
@@ -46,6 +51,8 @@ usando a lista de convidados quando for evidente, e ignore cumprimentos e assunt
 Regras:
 - Registre apenas o que foi efetivamente dito. Não invente decisões, responsáveis ou prazos.
 - Uma decisão é algo que o grupo fechou; uma ação é uma tarefa que alguém precisa executar depois.
+- Em cada ação, marque do_usuario: o usuário quer controlar o que ele e a equipe dele precisam entregar, \
+separado do que ficou com o cliente.
 - Converta prazos relativos ("sexta que vem", "fim do mês") em datas, usando a data da reunião como referência.
 - Escreva de forma objetiva e profissional, na terceira pessoa."""
 
@@ -55,7 +62,10 @@ def gerar_ata(transcricao: str, reuniao: dict) -> Ata:
     convidados = ", ".join(
         f"{p['nome'] or p['email']} <{p['email']}>" for p in reuniao.get("participantes", [])
     ) or "não informado"
+    cliente = reuniao.get("cliente_nome")
     contexto = (
+        f"Usuário (dono desta ferramenta): {config.SEU_NOME}\n"
+        f"Cliente desta reunião: {cliente or 'não informado'}\n"
         f"Título do evento: {reuniao.get('titulo', '')}\n"
         f"Data/hora de início: {reuniao.get('inicio', '')}\n"
         f"Convidados na agenda: {convidados}\n"

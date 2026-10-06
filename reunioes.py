@@ -6,18 +6,24 @@ Uso:
     python reunioes.py auto     gera atas das reuniões que já terminaram (para agendar no Windows)
 """
 
+import json
+from html import escape
 import socket
+import subprocess
 import sys
 import threading
 import traceback
 import webbrowser
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from flask import Flask, flash, redirect, render_template_string, request, url_for
 
 import analisador
+import assistente
 import atas
 import config
+import db
 import google_services as g
 import gravador
 import monitor
@@ -26,6 +32,7 @@ app = Flask(__name__)
 app.secret_key = "reunioes-local"
 
 GRAVADOR = gravador.Gravador()
+AO_VIVO: assistente.AoVivo | None = None  # assistente da reunião em andamento
 # Andamento do processamento depois que a gravação para (transcrição -> ata)
 TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None, "titulo": "", "transcricao_salva": None}
 
@@ -33,7 +40,9 @@ TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None,
 # ---------------------------------------------------------------- Lógica principal
 
 def processar(reuniao: dict, transcricao: str, origem: str) -> dict:
-    """Transcrição -> ata (Claude) -> Google Doc -> salva localmente."""
+    """Transcrição -> ata (Claude) -> Google Doc -> salva localmente -> tarefas do cliente."""
+    cli = db.cliente(reuniao.get("cliente_id"))
+    reuniao = {**reuniao, "cliente_id": cli["id"] if cli else None, "cliente_nome": cli["nome"] if cli else None}
     ata = analisador.gerar_ata(transcricao, reuniao)
     html = atas.para_html(ata, reuniao)
     data = reuniao.get("inicio", "")[:10]
@@ -47,9 +56,27 @@ def processar(reuniao: dict, transcricao: str, origem: str) -> dict:
         "gerada_em": datetime.now().isoformat(timespec="seconds"),
         "email_enviado_para": [],
         "followup": None,
+        "cliente_id": reuniao["cliente_id"],
     }
     atas.salvar(reuniao["id"], registro)
+    db.importar_acoes_da_ata(reuniao, ata, reuniao["cliente_id"])
     return registro
+
+
+def sugerir_cliente(reuniao: dict) -> int | None:
+    """Cliente provável: o de atas anteriores com as mesmas pessoas ou o mesmo título."""
+    emails = {p["email"].lower() for p in reuniao.get("participantes", [])}
+    votos = {}
+    for event_id in atas.existentes():
+        reg = atas.carregar(event_id) or {}
+        cid, r = reg.get("cliente_id"), reg.get("reuniao", {})
+        if not cid:
+            continue
+        outros = {p["email"].lower() for p in r.get("participantes", [])}
+        peso = len(emails & outros) + (2 if r.get("titulo") and r.get("titulo") == reuniao.get("titulo") else 0)
+        if peso:
+            votos[cid] = votos.get(cid, 0) + peso
+    return max(votos, key=votos.get) if votos else None
 
 
 def enviar_ata(event_id: str, destinatarios: list[str]) -> None:
@@ -124,15 +151,50 @@ def _reuniao_da_janela(titulo_janela: str) -> dict:
             "inicio": datetime.now().isoformat(timespec="minutes"), "descricao": "", "participantes": []}
 
 
+def iniciar_gravacao(reuniao: dict, automatica: bool) -> None:
+    """Começa a gravar, liga o assistente ao vivo e abre a janelinha de sugestões."""
+    global AO_VIVO
+    reuniao.setdefault("cliente_id", None)
+    reuniao["cliente_sugerido"] = sugerir_cliente(reuniao)
+    GRAVADOR.iniciar(reuniao)
+    GRAVADOR.automatica = automatica
+    if config.ASSISTENTE_AO_VIVO:
+        AO_VIVO = assistente.AoVivo(GRAVADOR, reuniao)
+        AO_VIVO.iniciar()
+    # A janelinha pergunta o cliente e mostra as sugestões
+    pythonw = config.BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
+    subprocess.Popen([str(pythonw if pythonw.exists() else sys.executable), str(config.BASE_DIR / "janela.py")],
+                     cwd=str(config.BASE_DIR))
+
+
+def definir_cliente_da_gravacao(cliente_id) -> None:
+    cli = db.cliente(cliente_id)
+    if GRAVADOR.reuniao is not None:
+        GRAVADOR.reuniao["cliente_id"] = cli["id"] if cli else None
+        GRAVADOR.reuniao["cliente_definido"] = True
+        if AO_VIVO:
+            AO_VIVO.atualizar_contexto()
+
+
+def encerrar_gravacao() -> tuple[dict, dict, str]:
+    """Para gravação e assistente. Devolve (reuniao, arquivos, transcrição feita ao vivo)."""
+    global AO_VIVO
+    ao_vivo, AO_VIVO = AO_VIVO, None
+    if ao_vivo:
+        ao_vivo.parar()
+    reuniao, arquivos = GRAVADOR.parar()
+    GRAVADOR.automatica = False
+    return reuniao, arquivos, ao_vivo.transcricao() if ao_vivo else ""
+
+
 def ao_detectar_meet(titulo_janela: str) -> None:
     if GRAVADOR.ativo:
         return
     reuniao = _reuniao_da_janela(titulo_janela)
     try:
-        GRAVADOR.iniciar(reuniao)
-        GRAVADOR.automatica = True
+        iniciar_gravacao(reuniao, automatica=True)
         print(f"[monitor] gravando: {reuniao['titulo']}")
-        monitor.notificar("Gravando reunião", f"{reuniao['titulo']} — a ata será gerada quando você sair da chamada.")
+        monitor.notificar("Gravando reunião", f"{reuniao['titulo']} — o assistente está ouvindo.")
     except Exception as e:
         traceback.print_exc()
         monitor.notificar("Não consegui gravar a reunião", str(e)[:150])
@@ -142,16 +204,40 @@ def ao_encerrar_meet() -> None:
     if not (GRAVADOR.ativo and GRAVADOR.automatica):
         return
     segundos = (datetime.now() - GRAVADOR.inicio).total_seconds()
-    reuniao, arquivos = GRAVADOR.parar()
-    GRAVADOR.automatica = False
+    reuniao, arquivos, ao_vivo = encerrar_gravacao()
     if segundos < config.DURACAO_MINIMA_SEG:
         for c in arquivos.values():
             c.unlink(missing_ok=True)
         print(f"[monitor] gravação de {segundos:.0f}s descartada (curta demais)")
         return
-    print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; gerando ata")
-    monitor.notificar("Reunião encerrada", "Transcrevendo e gerando a ata…")
-    threading.Thread(target=processar_gravacao, args=(reuniao, arquivos, True), daemon=True).start()
+    pid = salvar_pendente(reuniao, arquivos, ao_vivo, segundos)
+    print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; aguardando decisão sobre a ata")
+    monitor.notificar("Reunião encerrada", "Quer gerar a ata? Abri a pergunta no navegador.")
+    webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{pid}")
+
+
+# ---------------------------------------------------------------- Gravações aguardando decisão
+
+def salvar_pendente(reuniao: dict, arquivos: dict, transcricao_ao_vivo: str, segundos: float) -> str:
+    pid = arquivos["voce"].name.removesuffix("-voce.wav")
+    dados = {"reuniao": {k: v for k, v in reuniao.items() if k != "anexos"},
+             "arquivos": {n: str(c) for n, c in arquivos.items()},
+             "transcricao_ao_vivo": transcricao_ao_vivo, "minutos": round(segundos / 60),
+             "encerrada_em": datetime.now().isoformat(timespec="minutes")}
+    (config.GRAVACOES_DIR / f"{pid}.json").write_text(json.dumps(dados, ensure_ascii=False, indent=2), encoding="utf-8")
+    return pid
+
+
+def carregar_pendente(pid: str) -> dict | None:
+    arq = config.GRAVACOES_DIR / f"{pid}.json"
+    if not arq.exists() or "/" in pid or "\\" in pid:
+        return None
+    return json.loads(arq.read_text(encoding="utf-8"))
+
+
+def listar_pendentes() -> list[dict]:
+    return [{"pid": p.stem, **json.loads(p.read_text(encoding="utf-8"))}
+            for p in sorted(config.GRAVACOES_DIR.glob("*.json"), reverse=True)]
 
 
 def modo_auto() -> None:
@@ -197,7 +283,7 @@ table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid var(--bd
 .flash{background:#fff4e5;color:#7a4a00;border-radius:8px;padding:10px 14px;margin:10px 0}
 form.inline{display:inline}
 </style></head><body><main>
-<p><a href="{{ url_for('inicio') }}">← Reuniões</a></p>
+<nav style="display:flex;gap:16px;margin-bottom:8px"><a href="{{ url_for('inicio') }}"><b>Reuniões</b></a><a href="{{ url_for('tarefas') }}"><b>Tarefas</b></a></nav>
 {% for m in get_flashed_messages() %}<div class="flash">{{ m }}</div>{% endfor %}
 {{ corpo|safe }}
 </main>
@@ -227,6 +313,9 @@ def inicio():
     return pagina(
         """<h1>Minhas reuniões do Meet</h1>
 <p class="mut">Últimos 7 dias e próximos 7 dias da sua agenda.</p>
+{% if minhas %}<div class="card row"><div><b>{{ minhas|length }} tarefas suas em aberto</b>
+{% set atr = minhas|selectattr('atrasada')|list|length %}{% if atr %} · <b style="color:#d93025">{{ atr }} atrasadas</b>{% endif %}</div>
+<a class="btn" href="{{ url_for('tarefas') }}">Ver tarefas</a></div>{% endif %}
 {% if gravando or tarefa.ativa %}<div class="card row" style="border-color:#d93025"><div>
 <b style="color:#d93025">{% if gravando %}● Gravando{% else %}⏳ Processando gravação{% endif %}</b></div>
 <a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
@@ -245,6 +334,10 @@ def inicio():
 onsubmit="window.open('{{ r.link }}','_blank')"><button>● Entrar e gravar</button></form>{% endif %}
 <a class="btn sec" href="{{ r.link }}" target="_blank">Só entrar</a></div></div>
 {% else %}<p class="mut">Nada agendado.</p>{% endfor %}
+{% if pendentes %}<h2>Gravações aguardando decisão</h2>
+{% for p in pendentes %}<div class="card row"><div><b>{{ p.reuniao.titulo }}</b><br>
+<span class="mut">{{ p.encerrada_em.replace('T',' ') }} · {{ p.minutos }} min</span></div>
+<a class="btn" href="{{ url_for('pendente', pid=p.pid) }}">Gerar ata?</a></div>{% endfor %}{% endif %}
 <h2>Reunião fora da agenda</h2>
 <p>{% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id='avulsa') }}">
 <button class="sec">● Gravar agora</button></form> ·{% endif %}
@@ -254,13 +347,14 @@ onsubmit="window.open('{{ r.link }}','_blank')"><button>● Entrar e gravar</but
         feitas=feitas,
         gravando=GRAVADOR.ativo,
         tarefa=TAREFA,
+        pendentes=listar_pendentes(),
+        minhas=db.tarefas(somente_minhas=True),
     )
 
 
 @app.post("/gravar/<event_id>")
 def gravar(event_id):
-    if TAREFA["ativa"]:
-        flash("Aguarde terminar o processamento da gravação anterior.")
+    if GRAVADOR.ativo:
         return redirect(url_for("gravacao"))
     if event_id == "avulsa":
         reuniao = {"id": f"avulsa-{datetime.now():%Y%m%d%H%M%S}", "titulo": "Reunião gravada",
@@ -268,7 +362,7 @@ def gravar(event_id):
     else:
         reuniao = g.obter_reuniao(event_id)
     try:
-        GRAVADOR.iniciar(reuniao)
+        iniciar_gravacao(reuniao, automatica=False)
     except Exception as e:
         traceback.print_exc()
         flash(f"Não consegui iniciar a gravação: {e}")
@@ -280,13 +374,90 @@ def gravar(event_id):
 def parar():
     if GRAVADOR.ativo:
         try:
-            reuniao, arquivos = GRAVADOR.parar()
-            GRAVADOR.automatica = False
+            reuniao, arquivos, _ = encerrar_gravacao()
             TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=reuniao["id"])
             threading.Thread(target=processar_gravacao, args=(reuniao, arquivos), daemon=True).start()
         except Exception as e:
             flash(str(e))
     return redirect(url_for("gravacao"))
+
+
+# ---------------------------------------------------------------- API da janelinha de sugestões
+
+@app.get("/api/aovivo")
+def api_aovivo():
+    r = GRAVADOR.reuniao or {}
+    cli = db.cliente(r.get("cliente_id"))
+    estado = {"gravando": GRAVADOR.ativo, "duracao": GRAVADOR.duracao(), "titulo": r.get("titulo", ""),
+              "assistente": bool(AO_VIVO), "cliente_definido": bool(r.get("cliente_definido")),
+              "cliente": cli["nome"] if cli else None, "cliente_sugerido": r.get("cliente_sugerido"),
+              "clientes": [{"id": c["id"], "nome": c["nome"]} for c in db.clientes()]}
+    if AO_VIVO:
+        estado.update(AO_VIVO.estado())
+    return estado
+
+
+@app.post("/api/cliente")
+def api_cliente():
+    dados = request.get_json(silent=True) or {}
+    cliente_id = dados.get("cliente_id")
+    if dados.get("novo"):
+        cliente_id = db.criar_cliente(dados["novo"])
+    definir_cliente_da_gravacao(cliente_id)
+    return {"ok": True}
+
+
+@app.post("/api/sugerir")
+def api_sugerir():
+    if AO_VIVO:
+        AO_VIVO.pedir_sugestao()
+    return {"ok": bool(AO_VIVO)}
+
+
+# ---------------------------------------------------------------- Gerar ata? (fim da gravação automática)
+
+@app.route("/pendente/<pid>")
+def pendente(pid):
+    p = carregar_pendente(pid)
+    if not p:
+        flash("Essa gravação não está mais aguardando decisão.")
+        return redirect(url_for("inicio"))
+    return pagina(
+        """<h1>Gerar a ata desta reunião?</h1>
+<p><b>{{ p.reuniao.titulo }}</b> · {{ p.minutos }} min · encerrada em {{ p.encerrada_em.replace('T',' ') }}</p>
+<div class="row" style="justify-content:flex-start">
+<form class="inline" method="post" action="{{ url_for('pendente_gerar', pid=pid) }}">{{ seletor_cliente(atual)|safe }} <button>Sim, gerar ata</button></form>
+<form class="inline" method="post" action="{{ url_for('pendente_descartar', pid=pid) }}"
+onsubmit="return confirm('Apagar o áudio desta reunião? Não dá para desfazer.')"><button class="sec">Não, apagar o áudio</button></form>
+<a class="btn sec" href="{{ url_for('inicio') }}">Decidir depois</a></div>
+{% if p.transcricao_ao_vivo %}<h2>O que foi captado ao vivo</h2>
+<div class="card" style="white-space:pre-wrap;font-size:13px;max-height:400px;overflow:auto">{{ p.transcricao_ao_vivo }}</div>{% endif %}""",
+        p=p, pid=pid, seletor_cliente=seletor_cliente,
+        atual=p["reuniao"].get("cliente_id") or p["reuniao"].get("cliente_sugerido"),
+    )
+
+
+@app.post("/pendente/<pid>/gerar")
+def pendente_gerar(pid):
+    p = carregar_pendente(pid)
+    if p:
+        p["reuniao"]["cliente_id"] = cliente_do_formulario()
+        arquivos = {n: Path(c) for n, c in p["arquivos"].items()}
+        (config.GRAVACOES_DIR / f"{pid}.json").unlink(missing_ok=True)
+        TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=p["reuniao"]["id"])
+        threading.Thread(target=processar_gravacao, args=(p["reuniao"], arquivos), daemon=True).start()
+    return redirect(url_for("gravacao"))
+
+
+@app.post("/pendente/<pid>/descartar")
+def pendente_descartar(pid):
+    p = carregar_pendente(pid)
+    if p:
+        for c in p["arquivos"].values():
+            Path(c).unlink(missing_ok=True)
+        (config.GRAVACOES_DIR / f"{pid}.json").unlink(missing_ok=True)
+        flash("Áudio apagado.")
+    return redirect(url_for("inicio"))
 
 
 @app.route("/gravacao")
@@ -382,7 +553,8 @@ def ver_ata(event_id):
     return pagina(
         """<h1>{{ a.titulo }}</h1>
 <p class="mut">{{ r.inicio[:16].replace('T',' ') }} · transcrição: {{ reg.origem_transcricao }}</p>
-<p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a></p>
+<form method="post" action="{{ url_for('ata_cliente', event_id=event_id) }}" class="row" style="justify-content:flex-start"><span>Cliente:</span> {{ seletor_cliente(reg.cliente_id)|safe }} <button class="sec">Salvar</button>{% if not reg.cliente_id %}<span class="mut">defina o cliente para as tarefas aparecerem no lugar certo</span>{% endif %}</form>
+<p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a> <a class="btn sec" href="{{ url_for('tarefas', ver='todas') }}">Ver tarefas</a></p>
 <div class="card"><h2 style="margin-top:0">Resumo</h2><p>{{ a.resumo }}</p>
 <p class="mut">Participantes: {{ a.participantes|join(', ') }}</p></div>
 <div class="card"><h2 style="margin-top:0">Decisões</h2><ul>{% for d in a.decisoes %}<li>{{ d }}</li>{% else %}<li class="mut">Nenhuma</li>{% endfor %}</ul></div>
@@ -406,7 +578,7 @@ def ver_ata(event_id):
 <input type="number" name="duracao" value="{{ prox.duracao_min or 30 }}" min="15" step="15" style="flex:1"> min</div>
 <p class="mut">Convidados: {{ r.participantes|map(attribute='email')|join(', ') or 'nenhum' }}</p>
 <button>Criar evento com Meet</button></form>""",
-        a=a, r=r, reg=reg, prox=prox, event_id=event_id,
+        a=a, r=r, reg=reg, prox=prox, event_id=event_id, seletor_cliente=seletor_cliente,
     )
 
 
@@ -443,6 +615,131 @@ def followup(event_id):
     return redirect(url_for("ver_ata", event_id=event_id))
 
 
+# ---------------------------------------------------------------- Clientes e tarefas
+
+def seletor_cliente(atual=None, nome="cliente_id") -> str:
+    """<select> de clientes com opção de cadastrar um novo na hora."""
+    opcoes = ['<option value="">— sem cliente —</option>']
+    for c in db.clientes():
+        marcado = " selected" if atual and int(atual) == c["id"] else ""
+        opcoes.append(f'<option value="{c["id"]}"{marcado}>{escape(c["nome"])}</option>')
+    opcoes.append('<option value="novo">+ Novo cliente…</option>')
+    return (f'<select name="{nome}" onchange="this.nextElementSibling.style.display=this.value==\'novo\'?\'inline-block\':\'none\'"'
+            f' style="width:auto;padding:6px">{"".join(opcoes)}</select>'
+            '<input name="cliente_novo" placeholder="Nome do cliente" style="display:none;width:200px">')
+
+
+def cliente_do_formulario():
+    valor = request.form.get("cliente_id", "")
+    if valor == "novo":
+        nome = request.form.get("cliente_novo", "").strip()
+        return db.criar_cliente(nome) if nome else None
+    return int(valor) if valor.isdigit() else None
+
+
+@app.post("/ata/<event_id>/cliente")
+def ata_cliente(event_id):
+    reg = atas.carregar(event_id)
+    if reg:
+        reg["cliente_id"] = cliente_do_formulario()
+        atas.salvar(event_id, reg)
+        db.mover_tarefas_da_ata(event_id, reg["cliente_id"])
+        flash("Cliente atualizado; as tarefas desta reunião foram movidas junto.")
+    return redirect(url_for("ver_ata", event_id=event_id))
+
+
+@app.route("/tarefas")
+def tarefas():
+    ver = request.args.get("ver", "minhas")
+    feitas = request.args.get("feitas") == "1"
+    cliente_id = request.args.get("cliente", type=int)
+    lista = db.tarefas(somente_minhas=ver == "minhas", incluir_feitas=feitas, cliente_id=cliente_id)
+    grupos = {}
+    for t in lista:
+        grupos.setdefault(t["cliente"] or "Sem cliente", []).append(t)
+    abertas = [t for t in lista if t["status"] != "feito"]
+    return pagina(
+        """<h1>Tarefas e demandas</h1>
+<div class="row" style="justify-content:flex-start;gap:8px;margin:8px 0 16px">
+<a class="btn {{ '' if ver=='minhas' else 'sec' }}" href="{{ url_for('tarefas', ver='minhas', feitas=feitas and 1 or None, cliente=cliente_id) }}">O que eu tenho que fazer</a>
+<a class="btn {{ '' if ver=='todas' else 'sec' }}" href="{{ url_for('tarefas', ver='todas', feitas=feitas and 1 or None, cliente=cliente_id) }}">Todas (inclui as do cliente)</a>
+<form method="get" class="inline"><input type="hidden" name="ver" value="{{ ver }}">{% if feitas %}<input type="hidden" name="feitas" value="1">{% endif %}
+<select name="cliente" onchange="this.form.submit()" style="width:auto;padding:6px"><option value="">Todos os clientes</option>
+{% for c in clientes %}<option value="{{ c.id }}" {{ 'selected' if c.id == cliente_id }}>{{ c.nome }}</option>{% endfor %}</select></form>
+<a href="{{ url_for('tarefas', ver=ver, feitas=None if feitas else 1, cliente=cliente_id) }}">{{ 'Esconder concluídas' if feitas else 'Mostrar concluídas' }}</a>
+</div>
+<p><b style="color:#d93025">{{ abertas|selectattr('atrasada')|list|length }} atrasadas</b> ·
+<b>{{ abertas|selectattr('hoje')|list|length }} para hoje</b> · {{ abertas|length }} em aberto</p>
+
+{% for nome, itens in grupos.items() %}<h2>{{ nome }}</h2><div class="card" style="padding:4px 8px"><table>
+{% for t in itens %}<tr style="{{ 'opacity:.55' if t.status=='feito' }}">
+<td style="width:28px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
+<input type="hidden" name="status" value="{{ 'a_fazer' if t.status=='feito' else 'feito' }}">
+<input type="checkbox" style="width:auto" onchange="this.form.submit()" {{ 'checked' if t.status=='feito' }} title="Concluir"></form></td>
+<td>{% if t.status=='feito' %}<s>{{ t.descricao }}</s>{% else %}{{ t.descricao }}{% endif %}
+<br><span class="mut">{{ t.responsavel or '—' }}{% if not t.minha %} · do cliente/terceiros{% endif %}
+{% if t.origem_ata %} · <a href="{{ url_for('ver_ata', event_id=t.origem_ata) }}">{{ t.origem_titulo or 'reunião' }}</a>{% endif %}</span></td>
+<td style="width:150px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
+<input type="date" name="prazo" value="{{ t.prazo or '' }}" onchange="this.form.submit()"
+style="{{ 'border-color:#d93025;color:#d93025;font-weight:600' if t.atrasada }}"></form></td>
+<td style="width:120px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}">
+<select name="status" onchange="this.form.submit()" style="padding:6px">
+{% for s, rot in [('a_fazer','A fazer'),('fazendo','Fazendo'),('feito','Feito')] %}<option value="{{ s }}" {{ 'selected' if t.status==s }}>{{ rot }}</option>{% endfor %}
+</select></form></td>
+<td style="width:30px"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}" onsubmit="return confirm('Excluir esta tarefa?')">
+<input type="hidden" name="excluir" value="1"><button class="sec" style="padding:2px 8px" title="Excluir">×</button></form></td>
+</tr>{% endfor %}</table></div>
+{% else %}<p class="mut">Nenhuma tarefa aqui. As ações das atas entram sozinhas nesta lista.</p>{% endfor %}
+
+<h2>Nova tarefa</h2>
+<form method="post" action="{{ url_for('tarefa_nova') }}" class="card">
+<p><input name="descricao" placeholder="O que precisa ser feito" required></p>
+<div class="row" style="justify-content:flex-start">{{ seletor_cliente(cliente_id)|safe }}
+<input name="responsavel" value="{{ seu_nome }}" placeholder="Responsável" style="width:160px">
+<input type="date" name="prazo" style="width:160px">
+<label><input type="checkbox" name="minha" value="1" checked style="width:auto"> é minha</label>
+<button>Adicionar</button></div></form>
+
+<h2>Clientes</h2>
+<div class="card">{% for c in clientes %}<form method="post" action="{{ url_for('cliente_renomear', cliente_id=c.id) }}" class="row" style="justify-content:flex-start;margin:4px 0">
+<input name="nome" value="{{ c.nome }}" style="width:260px"><button class="sec">Renomear</button>
+<a href="{{ url_for('tarefas', ver='todas', cliente=c.id) }}">ver tarefas</a></form>{% else %}<p class="mut">Nenhum cliente ainda.</p>{% endfor %}
+<form method="post" action="{{ url_for('cliente_novo') }}" class="row" style="justify-content:flex-start;margin-top:10px">
+<input name="nome" placeholder="Novo cliente" required style="width:260px"><button>Cadastrar</button></form></div>""",
+        grupos=grupos, abertas=abertas, ver=ver, feitas=feitas, cliente_id=cliente_id, clientes=db.clientes(),
+        seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME,
+    )
+
+
+@app.post("/tarefas/nova")
+def tarefa_nova():
+    db.criar_tarefa(cliente_do_formulario(), request.form["descricao"], request.form.get("responsavel", ""),
+                    request.form.get("minha") == "1", request.form.get("prazo"))
+    return redirect(request.referrer or url_for("tarefas"))
+
+
+@app.post("/tarefas/<int:tarefa_id>")
+def tarefa_atualizar(tarefa_id):
+    if request.form.get("excluir"):
+        db.excluir_tarefa(tarefa_id)
+    else:
+        db.atualizar_tarefa(tarefa_id, **{k: v for k, v in request.form.items() if k in ("status", "prazo")})
+    return redirect(request.referrer or url_for("tarefas"))
+
+
+@app.post("/clientes/novo")
+def cliente_novo():
+    db.criar_cliente(request.form["nome"])
+    return redirect(request.referrer or url_for("tarefas"))
+
+
+@app.post("/clientes/<int:cliente_id>")
+def cliente_renomear(cliente_id):
+    if request.form.get("nome", "").strip():
+        db.renomear_cliente(cliente_id, request.form["nome"])
+    return redirect(request.referrer or url_for("tarefas"))
+
+
 if __name__ == "__main__":
     comando = sys.argv[1] if len(sys.argv) > 1 else "web"
     if comando == "login":
@@ -462,5 +759,8 @@ if __name__ == "__main__":
         if config.GRAVACAO_AUTOMATICA:
             monitor.iniciar(ao_detectar_meet, ao_encerrar_meet, lambda: GRAVADOR.ativo and GRAVADOR.automatica)
             print("[monitor] vigiando chamadas do Meet")
+        # Deixa os modelos de voz prontos antes da primeira reunião
+        threading.Thread(target=lambda: [gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO),
+                                         gravador.carregar_modelo()], daemon=True).start()
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         app.run(port=config.PORTA, debug=False)

@@ -6,3 +6,4 @@ atas/
 __pycache__/
 reunioes.log
 gravacoes/
+dados.db

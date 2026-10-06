@@ -74,6 +74,29 @@ e começa a gravar) ou **● Gravar agora** para uma reunião fora da agenda. Ao
   e mais lentos.
 - Os áudios e transcrições ficam em `gravacoes/`. Apague os antigos quando quiser liberar espaço.
 
+### Durante a reunião: cliente e sugestões de resposta
+
+Quando uma chamada do Meet começa, a gravação inicia sozinha e abre uma **janelinha no canto da tela**:
+
+1. Ela pergunta **"Qual cliente é esta reunião?"** (sugere o cliente de reuniões anteriores com as mesmas
+   pessoas; dá para digitar um cliente novo).
+2. Enquanto a conversa acontece, ela **sugere o que responder** sempre que alguém se dirige a você
+   (pergunta, pedido de prazo, preço, opinião). O botão **"O que eu respondo?"** pede uma sugestão na hora.
+   O assistente usa a pauta do convite, as tarefas em aberto do cliente e as atas anteriores.
+3. A janelinha fica **invisível para quem assiste ao seu compartilhamento de tela**.
+
+Ao sair da chamada, o painel pergunta **"Gerar a ata desta reunião?"** (Sim / Não, apagar o áudio / Decidir depois).
+
+### Tarefas por cliente
+
+As ações de cada ata viram tarefas do cliente da reunião. A tela **Tarefas** mostra:
+
+- **O que eu tenho que fazer**: o que ficou com você/sua equipe; **Todas**: inclui o que ficou com o cliente.
+- Agrupado por cliente, com prazo (atrasadas em vermelho), status (a fazer / fazendo / feito) e link para a ata.
+- Tarefas manuais e cadastro de clientes. Trocar o cliente de uma ata move as tarefas dela junto.
+
+Os dados ficam em `dados.db` (SQLite, local, fora do Git).
+
 ### Abrir junto com o Windows
 
 Já configurado: o atalho `Assistente de Reunioes` na pasta Inicializar do Windows (`Win+R` → `shell:startup`)

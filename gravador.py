@@ -17,19 +17,20 @@ import config
 
 TAXA = 16000  # Whisper trabalha em 16 kHz
 
-_modelo = None
+_modelos = {}
 _modelo_lock = threading.Lock()
 
 
-def carregar_modelo():
-    """Carrega o Whisper uma vez (na primeira vez baixa o modelo da internet)."""
-    global _modelo
+def carregar_modelo(nome: str | None = None):
+    """Carrega um modelo do Whisper uma vez (na primeira vez baixa da internet).
+    Padrão: o modelo da ata (mais preciso). O assistente ao vivo usa um menor e mais rápido."""
+    nome = nome or config.WHISPER_MODELO
     with _modelo_lock:
-        if _modelo is None:
+        if nome not in _modelos:
             from faster_whisper import WhisperModel
 
-            _modelo = WhisperModel(config.WHISPER_MODELO, device="cpu", compute_type="int8")
-    return _modelo
+            _modelos[nome] = WhisperModel(nome, device="cpu", compute_type="int8")
+    return _modelos[nome]
 
 
 class _Trilha(threading.Thread):
@@ -37,6 +38,8 @@ class _Trilha(threading.Thread):
         super().__init__(daemon=True)
         self.dispositivo, self.caminho, self.parar = dispositivo, caminho, parar
         self.erro = None
+        # Áudio novo ainda não lido pelo assistente ao vivo
+        self._novos, self._lock = [], threading.Lock()
 
     def run(self):
         try:
@@ -48,11 +51,19 @@ class _Trilha(threading.Thread):
                     while not self.parar.is_set():
                         dados = rec.record(numframes=None)  # lê o que estiver disponível, sem atrasar
                         if len(dados):
-                            wav.writeframes((np.clip(dados[:, 0], -1, 1) * 32767).astype("<i2").tobytes())
+                            mono = np.clip(dados[:, 0], -1, 1).astype(np.float32)
+                            wav.writeframes((mono * 32767).astype("<i2").tobytes())
+                            with self._lock:
+                                self._novos.append(mono)
                         else:
                             time.sleep(0.01)
         except Exception as e:
             self.erro = e
+
+    def consumir(self) -> np.ndarray:
+        with self._lock:
+            novos, self._novos = self._novos, []
+        return np.concatenate(novos) if novos else np.zeros(0, dtype=np.float32)
 
 
 class Gravador:
@@ -64,6 +75,7 @@ class Gravador:
         self.arquivos = {}
         self._parar = threading.Event()
         self._trilhas = []
+        self.trilhas = {}
 
     def iniciar(self, reuniao: dict) -> None:
         import soundcard as sc
@@ -79,11 +91,12 @@ class Gravador:
         self._parar.clear()
         self.arquivos = {nome: base.with_name(f"{base.name}-{nome}.wav") for nome in fontes}
         self._trilhas = [_Trilha(dev, self.arquivos[nome], self._parar) for nome, dev in fontes.items()]
+        self.trilhas = dict(zip(fontes, self._trilhas))  # nome -> trilha, para o assistente ao vivo
         for t in self._trilhas:
             t.start()
         self.ativo, self.reuniao, self.inicio = True, reuniao, datetime.now()
-        # Já vai carregando o Whisper enquanto a reunião acontece
-        threading.Thread(target=carregar_modelo, daemon=True).start()
+
+
 
     def parar(self) -> tuple[dict, dict]:
         """Encerra a gravação e devolve (reuniao, arquivos)."""
@@ -92,7 +105,7 @@ class Gravador:
             t.join(timeout=10)
         erros = [str(t.erro) for t in self._trilhas if t.erro]
         reuniao, arquivos = self.reuniao, self.arquivos
-        self.ativo, self.reuniao, self._trilhas = False, None, []
+        self.ativo, self.reuniao, self._trilhas, self.trilhas = False, None, [], {}
         if erros and len(erros) == len(arquivos):
             raise RuntimeError("Falha ao gravar o áudio: " + "; ".join(erros))
         return reuniao, arquivos
