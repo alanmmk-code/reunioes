@@ -7,6 +7,7 @@ Uso:
 """
 
 import json
+from urllib.parse import urlencode
 from html import escape
 import socket
 import subprocess
@@ -63,6 +64,15 @@ def processar(reuniao: dict, transcricao: str, origem: str) -> dict:
     return registro
 
 
+def tarefas_da_ata(event_id: str) -> str:
+    """Endereço da tela de Tarefas filtrada no cliente da reunião, com o aviso da ata nova."""
+    reg = atas.carregar(event_id) or {}
+    params = {"ver": "minhas", "nova_ata": event_id}
+    if reg.get("cliente_id"):
+        params["cliente"] = reg["cliente_id"]
+    return "/tarefas?" + urlencode(params)
+
+
 def sugerir_cliente(reuniao: dict) -> int | None:
     """Cliente provável: o de atas anteriores com as mesmas pessoas ou o mesmo título."""
     emails = {p["email"].lower() for p in reuniao.get("participantes", [])}
@@ -115,8 +125,8 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
         processar(reuniao, texto, f"Gravação no PC + Whisper ({config.WHISPER_MODELO})")
         TAREFA.update(etapa="Concluído")
         if avisar:
-            monitor.notificar("Ata pronta", reuniao.get("titulo", ""))
-            webbrowser.open(f"http://localhost:{config.PORTA}/ata/{reuniao['id']}")
+            monitor.notificar("Ata pronta", f"{reuniao.get('titulo', '')} — abrindo suas tarefas")
+            webbrowser.open(f"http://localhost:{config.PORTA}{tarefas_da_ata(reuniao['id'])}")
     except Exception as e:
         traceback.print_exc()
         TAREFA.update(erro=str(e))
@@ -464,7 +474,7 @@ def pendente_descartar(pid):
 def gravacao():
     if not GRAVADOR.ativo and not TAREFA["ativa"] and not TAREFA["erro"] and TAREFA["event_id"]:
         if atas.carregar(TAREFA["event_id"]):
-            return redirect(url_for("ver_ata", event_id=TAREFA["event_id"]))
+            return redirect(tarefas_da_ata(TAREFA["event_id"]))
     return pagina(
         """{% if gravando %}<meta http-equiv="refresh" content="5">
 <h1 style="color:#d93025">● Gravando</h1><p><b>{{ titulo }}</b> · {{ duracao }}</p>
@@ -505,7 +515,7 @@ def gerar(event_id):
         traceback.print_exc()
         flash(f"Erro ao gerar a ata: {e}")
         return redirect(url_for("inicio"))
-    return redirect(url_for("ver_ata", event_id=event_id))
+    return redirect(tarefas_da_ata(event_id))
 
 
 @app.route("/manual/<event_id>", methods=["GET", "POST"])
@@ -527,7 +537,7 @@ def manual(event_id):
                 reuniao["titulo"] = request.form.get("titulo", "") or "Reunião"
             try:
                 processar(reuniao, texto, "Texto colado manualmente")
-                return redirect(url_for("ver_ata", event_id=reuniao["id"]))
+                return redirect(tarefas_da_ata(reuniao["id"]))
             except Exception as e:
                 traceback.print_exc()
                 flash(f"Erro ao gerar a ata: {e}")
@@ -658,8 +668,21 @@ def tarefas():
     for t in lista:
         grupos.setdefault(t["cliente"] or "Sem cliente", []).append(t)
     abertas = [t for t in lista if t["status"] != "feito"]
+    nova = None
+    reg = atas.carregar(request.args.get("nova_ata", "")) if request.args.get("nova_ata") else None
+    if reg:
+        da_ata = [t for t in db.tarefas(incluir_feitas=True) if t["origem_ata"] == request.args["nova_ata"]]
+        cli = db.cliente(reg.get("cliente_id"))
+        nova = {"id": request.args["nova_ata"], "titulo": reg["ata"]["titulo"], "cliente": cli["nome"] if cli else None,
+                "minhas": sum(1 for t in da_ata if t["minha"]), "cliente_qtd": sum(1 for t in da_ata if not t["minha"])}
     return pagina(
-        """<h1>Tarefas e demandas</h1>
+        """{% if nova %}<div class="card" style="border-color:#1e8e3e">
+<b class="ok">✓ Ata pronta: {{ nova.titulo }}</b>{% if nova.cliente %} · cliente {{ nova.cliente }}{% endif %}<br>
+{% if nova.minhas %}{{ nova.minhas }} tarefa{{ 's' if nova.minhas > 1 }} nova{{ 's' if nova.minhas > 1 }} para você{% else %}Nenhuma tarefa nova para você{% endif %}{% if nova.cliente_qtd %} e {{ nova.cliente_qtd }} com o cliente/terceiros (veja em "Todas"){% endif %}.
+<div class="row" style="justify-content:flex-start;margin-top:8px">
+<a class="btn" href="{{ url_for('ver_ata', event_id=nova.id) }}">Ver a ata</a>
+{% if not nova.cliente %}<span class="mut">Esta ata está sem cliente: defina na página da ata.</span>{% endif %}</div></div>{% endif %}
+<h1>Tarefas e demandas</h1>
 <div class="row" style="justify-content:flex-start;gap:8px;margin:8px 0 16px">
 <a class="btn {{ '' if ver=='minhas' else 'sec' }}" href="{{ url_for('tarefas', ver='minhas', feitas=feitas and 1 or None, cliente=cliente_id) }}">O que eu tenho que fazer</a>
 <a class="btn {{ '' if ver=='todas' else 'sec' }}" href="{{ url_for('tarefas', ver='todas', feitas=feitas and 1 or None, cliente=cliente_id) }}">Todas (inclui as do cliente)</a>
@@ -706,7 +729,7 @@ style="{{ 'border-color:#d93025;color:#d93025;font-weight:600' if t.atrasada }}"
 <a href="{{ url_for('tarefas', ver='todas', cliente=c.id) }}">ver tarefas</a></form>{% else %}<p class="mut">Nenhum cliente ainda.</p>{% endfor %}
 <form method="post" action="{{ url_for('cliente_novo') }}" class="row" style="justify-content:flex-start;margin-top:10px">
 <input name="nome" placeholder="Novo cliente" required style="width:260px"><button>Cadastrar</button></form></div>""",
-        grupos=grupos, abertas=abertas, ver=ver, feitas=feitas, cliente_id=cliente_id, clientes=db.clientes(),
+        nova=nova, grupos=grupos, abertas=abertas, ver=ver, feitas=feitas, cliente_id=cliente_id, clientes=db.clientes(),
         seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME,
     )
 
