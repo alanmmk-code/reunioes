@@ -163,6 +163,17 @@ faz o login, confere o Claude Code, traz todos os seus dados do Drive e cria os 
 
 **Atualizar o código** (quando houver mudanças no GitHub): `git pull` e reabra o painel.
 
+**O que conferir no PC novo depois do instalador:**
+
+- **Outlook clássico** instalado e aberto, com as contas de e-mail configuradas: e-mails (ata, cobrança) e
+  convites de reunião saem por ele, pela conta escolhida em "Enviar de". Defina a conta padrão em
+  `EMAIL_REMETENTE` no `.env`.
+- **Microfone**: em `MICROFONE` no `.env`, uma parte do nome do microfone que deve gravar (ex.: `Realtek`).
+  Vazio = o padrão do Windows. Microfone de fone Bluetooth em chamada costuma chegar baixo e piorar a
+  transcrição; o do notebook ou um fone com fio funcionam melhor. Para comparar dois microfones numa reunião,
+  use `MICROFONE_COMPARAR`.
+- **Claude Code** logado com a sua assinatura (`claude` no terminal → `/login`).
+
 **Sincronização dos dados** (automática: ao abrir, a cada 5 minutos e logo depois de cada alteração;
 ou pelo botão **Sincronizar** no topo do painel):
 
