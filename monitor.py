@@ -1,8 +1,10 @@
 """Detecta reuniões do Meet abertas no navegador para gravar automaticamente.
 
-- Início: uma janela com título do Meet ("Meet - abc-defg-hij") E o navegador usando o microfone.
-- Fim: o navegador para de usar o microfone (saiu da chamada) por alguns segundos.
-O microfone é a referência do fim porque o título da janela muda quando você troca de aba.
+- Início: uma janela com título do Meet ("Meet - abc-defg-hij") E o navegador em chamada.
+- Fim: o navegador sai da chamada por alguns segundos.
+"Em chamada" = navegador com o microfone aberto OU tocando áudio. Quem entra com o microfone desligado
+não abre o microfone, mas o áudio da chamada fica aberto até sair (no mudo o Meet mantém o microfone).
+O áudio é a referência do fim porque o título da janela muda quando você troca de aba.
 """
 
 import ctypes
@@ -21,7 +23,7 @@ TITULO_MEET = re.compile(r"^Meet\s*[-–:]\s*(.+)$")
 CODIGO_MEET = re.compile(r"\b[a-z]{3}-[a-z]{4}-[a-z]{3}\b")
 
 INTERVALO = 3  # segundos entre verificações
-FIM_APOS = 15  # segundos sem microfone no navegador para considerar que a chamada acabou
+FIM_APOS = 15  # segundos com o navegador fora de chamada (sem microfone e sem áudio) para considerar o fim
 MEMORIA_TITULO = 120  # segundos que um título do Meet visto continua valendo
 
 
@@ -59,9 +61,25 @@ def navegador_usando_microfone() -> bool:
         return _microfone_pelo_registro()
 
 
+def navegador_tocando_audio() -> bool:
+    """True se algum navegador está com o áudio de saída aberto (numa chamada, mesmo em silêncio)."""
+    try:
+        return _navegador_em_sessao_de_audio(0)
+    except Exception:
+        return False
+
+
+def navegador_em_chamada() -> bool:
+    return navegador_usando_microfone() or navegador_tocando_audio()
+
+
 def _microfone_por_sessao_de_audio() -> bool:
-    """Pergunta ao sistema de áudio do Windows quais programas estão com o microfone aberto
-    (a mesma informação do mixer de volume). É o método mais confiável."""
+    return _navegador_em_sessao_de_audio(1)
+
+
+def _navegador_em_sessao_de_audio(fluxo: int) -> bool:
+    """Pergunta ao sistema de áudio do Windows quais programas estão com o áudio aberto
+    (a mesma informação do mixer de volume). fluxo: 0 = saída, 1 = microfone."""
     import comtypes
     import psutil
     from comtypes import CLSCTX_ALL
@@ -71,9 +89,9 @@ def _microfone_por_sessao_de_audio() -> bool:
     comtypes.CoInitialize()
     try:
         enum = comtypes.CoCreateInstance(CLSID_MMDeviceEnumerator, IMMDeviceEnumerator, CLSCTX_ALL)
-        microfones = enum.EnumAudioEndpoints(1, 1)  # captura, só os ativos
-        for i in range(microfones.GetCount()):
-            mgr = microfones.Item(i).Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
+        dispositivos = enum.EnumAudioEndpoints(fluxo, 1)  # só os ativos
+        for i in range(dispositivos.GetCount()):
+            mgr = dispositivos.Item(i).Activate(IAudioSessionManager2._iid_, CLSCTX_ALL, None)
             sessoes = mgr.QueryInterface(IAudioSessionManager2).GetSessionEnumerator()
             for j in range(sessoes.GetCount()):
                 s = sessoes.GetSession(j).QueryInterface(IAudioSessionControl2)
@@ -157,24 +175,24 @@ def iniciar(ao_detectar, ao_encerrar, gravando_automatico) -> None:
     """
 
     def loop():
-        ultimo_titulo, visto_em, sem_mic_desde = None, 0.0, None
+        ultimo_titulo, visto_em, fora_desde = None, 0.0, None
         while True:
             try:
                 titulo = janela_meet()
                 if titulo:
                     ultimo_titulo, visto_em = titulo, time.time()
-                mic = navegador_usando_microfone()
+                em_chamada = navegador_em_chamada()
 
                 if gravando_automatico():
-                    if mic:
-                        sem_mic_desde = None
+                    if em_chamada:
+                        fora_desde = None
                     else:
-                        sem_mic_desde = sem_mic_desde or time.time()
-                        if time.time() - sem_mic_desde >= FIM_APOS:
-                            sem_mic_desde = None
+                        fora_desde = fora_desde or time.time()
+                        if time.time() - fora_desde >= FIM_APOS:
+                            fora_desde = None
                             ultimo_titulo = None
                             ao_encerrar()
-                elif mic and ultimo_titulo and time.time() - visto_em <= MEMORIA_TITULO:
+                elif em_chamada and ultimo_titulo and time.time() - visto_em <= MEMORIA_TITULO:
                     ao_detectar(ultimo_titulo)
                     ultimo_titulo = None  # não dispara de novo para a mesma chamada
             except Exception as e:
