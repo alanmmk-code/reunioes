@@ -60,6 +60,8 @@ def _contexto(reuniao: dict) -> str:
         partes.append(f"Descrição/pauta do convite:\n{reuniao['descricao']}")
     if reuniao.get("participantes"):
         partes.append("Convidados: " + ", ".join(p.get("nome") or p["email"] for p in reuniao["participantes"]))
+    if reuniao.get("na_chamada"):
+        partes.append("Pessoas na chamada: " + ", ".join(reuniao["na_chamada"]))
 
     # Atas anteriores com as mesmas pessoas (ou mesmo título)
     emails = {p["email"].lower() for p in reuniao.get("participantes", [])}

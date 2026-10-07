@@ -84,6 +84,18 @@ def criar_tabelas() -> None:
                 excluido INTEGER NOT NULL DEFAULT 0
             )"""
         )
+        # Pessoas de cada cliente (quem entra nas chamadas), escolhidas ou digitadas no assistente
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS pessoas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT NOT NULL UNIQUE,
+                cliente_id INTEGER REFERENCES clientes(id),
+                nome TEXT NOT NULL,
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                excluido INTEGER NOT NULL DEFAULT 0
+            )"""
+        )
         # uuid de cliente que foi unido a outro -> uuid que ficou (sincronizado entre PCs)
         con.execute("CREATE TABLE IF NOT EXISTS clientes_alias (uuid TEXT PRIMARY KEY, para TEXT NOT NULL)")
 
@@ -325,6 +337,46 @@ def excluir_nota(nota_id) -> None:
         con.execute("UPDATE notas SET excluido = 1, atualizado_em = ? WHERE id = ?", (agora(), nota_id))
 
 
+# ---------------------------------------------------------------- pessoas por cliente
+
+def pessoas(cliente_id) -> list[str]:
+    """Nomes das pessoas do cliente (quem já entrou em chamada), em ordem alfabética."""
+    cliente_id = _id(cliente_id)
+    if not cliente_id:
+        return []
+    with conexao() as con:
+        return [r["nome"] for r in con.execute(
+            "SELECT nome FROM pessoas WHERE cliente_id = ? AND excluido = 0 ORDER BY nome COLLATE NOCASE", (cliente_id,))]
+
+
+def pessoas_por_cliente() -> dict[int, list[str]]:
+    with conexao() as con:
+        lista = {}
+        for r in con.execute("SELECT cliente_id, nome FROM pessoas WHERE excluido = 0 AND cliente_id IS NOT NULL "
+                             "ORDER BY nome COLLATE NOCASE"):
+            lista.setdefault(r["cliente_id"], []).append(r["nome"])
+        return lista
+
+
+def adicionar_pessoa(cliente_id, nome) -> bool:
+    """Liga a pessoa ao cliente (sem duplicar: mesmo nome, sem diferenciar maiúsculas). True se é nova."""
+    nome = " ".join(str(nome or "").split())[:80]
+    c = cliente(cliente_id)
+    if not nome or not c:
+        return False
+    with conexao() as con:
+        existente = con.execute("SELECT id, excluido FROM pessoas WHERE cliente_id = ? AND nome = ? COLLATE NOCASE",
+                                (c["id"], nome)).fetchone()
+        if existente:
+            if existente["excluido"]:
+                con.execute("UPDATE pessoas SET excluido = 0, atualizado_em = ? WHERE id = ?", (agora(), existente["id"]))
+            return bool(existente["excluido"])
+        momento = agora()
+        con.execute("INSERT INTO pessoas (uuid, cliente_id, nome, criado_em, atualizado_em) VALUES (?, ?, ?, ?, ?)",
+                    (_uuid.uuid4().hex, c["id"], nome, momento, momento))
+        return True
+
+
 # ---------------------------------------------------------------- sincronização
 #
 # Clientes com o mesmo nome (sem diferenciar maiúsculas) são o MESMO cliente, venham de onde vierem
@@ -360,6 +412,7 @@ def _unir_registros(con, a: dict, b: dict) -> None:
     fica, sai = (a, b) if a["uuid"] == canonico else (b, a)
     con.execute("UPDATE tarefas SET cliente_id = ? WHERE cliente_id = ?", (fica["id"], sai["id"]))
     con.execute("UPDATE notas SET cliente_id = ? WHERE cliente_id = ?", (fica["id"], sai["id"]))
+    con.execute("UPDATE pessoas SET cliente_id = ? WHERE cliente_id = ?", (fica["id"], sai["id"]))
     con.execute("DELETE FROM clientes WHERE id = ?", (sai["id"],))
     con.execute("UPDATE clientes SET nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
                 (novo["nome"], novo.get("emails") or "", int(novo.get("excluido") or 0), novo["atualizado_em"], fica["id"]))
@@ -394,8 +447,11 @@ def exportar() -> dict:
         nts = [dict(r) for r in con.execute(
             "SELECT n.uuid, c.uuid AS cliente_uuid, n.texto, n.criado_em, n.atualizado_em, n.excluido "
             "FROM notas n LEFT JOIN clientes c ON c.id = n.cliente_id ORDER BY n.uuid")]
+        pes = [dict(r) for r in con.execute(
+            "SELECT p.uuid, c.uuid AS cliente_uuid, p.nome, p.criado_em, p.atualizado_em, p.excluido "
+            "FROM pessoas p LEFT JOIN clientes c ON c.id = p.cliente_id ORDER BY p.uuid")]
         apelidos = [dict(r) for r in con.execute("SELECT uuid, para FROM clientes_alias ORDER BY uuid")]
-    return {"clientes": cli, "tarefas": tar, "notas": nts, "apelidos": apelidos}
+    return {"clientes": cli, "tarefas": tar, "notas": nts, "pessoas": pes, "apelidos": apelidos}
 
 
 def _tarefa_limpa(t: dict) -> list:
@@ -501,6 +557,27 @@ def mesclar(remoto: dict) -> int:
                 con.execute("UPDATE notas SET cliente_id = ?, texto = ?, atualizado_em = ?, excluido = ? WHERE uuid = ?",
                             (id_local(n.get("cliente_uuid")), texto, n["atualizado_em"], int(bool(n.get("excluido"))),
                              n["uuid"]))
+                mudou += 1
+
+        # 5) pessoas dos clientes
+        for p in remoto.get("pessoas", []) or []:
+            nome = " ".join(str(p.get("nome") or "").split())[:80]
+            if not p.get("uuid") or not nome:
+                continue
+            cid = id_local(p.get("cliente_uuid"))
+            local = con.execute("SELECT atualizado_em FROM pessoas WHERE uuid = ?", (p["uuid"],)).fetchone()
+            if not local:
+                # a mesma pessoa criada nos dois PCs (mesmo cliente e nome) fica uma só
+                if con.execute("SELECT 1 FROM pessoas WHERE cliente_id IS ? AND nome = ? COLLATE NOCASE",
+                               (cid, nome)).fetchone():
+                    continue
+                con.execute("INSERT INTO pessoas (uuid, cliente_id, nome, criado_em, atualizado_em, excluido) "
+                            "VALUES (?, ?, ?, ?, ?, ?)", (p["uuid"], cid, nome, p.get("criado_em") or agora(),
+                                                           p.get("atualizado_em") or "", int(bool(p.get("excluido")))))
+                mudou += 1
+            elif (p.get("atualizado_em") or "") > (local["atualizado_em"] or ""):
+                con.execute("UPDATE pessoas SET cliente_id = ?, nome = ?, atualizado_em = ?, excluido = ? WHERE uuid = ?",
+                            (cid, nome, p["atualizado_em"], int(bool(p.get("excluido"))), p["uuid"]))
                 mudou += 1
     return mudou
 

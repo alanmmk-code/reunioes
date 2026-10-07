@@ -30,7 +30,7 @@ class Janela:
         self.root.title("Assistente da reunião")
         self.root.configure(bg=CORES["fundo"])
         self.root.attributes("-topmost", True)
-        largura, altura = 400, 680
+        largura, altura = 400, 800
         x = self.root.winfo_screenwidth() - largura - 16
         y = self.root.winfo_screenheight() - altura - 72
         self.root.geometry(f"{largura}x{altura}+{x}+{y}")
@@ -55,9 +55,29 @@ class Janela:
                                 selectforeground="#14171c", relief="flat", highlightthickness=0, exportselection=False)
         self.lista.pack(fill="x")
         self.lista.bind("<Double-Button-1>", lambda _: self.confirmar_cliente())
+        self.lista.bind("<<ListboxSelect>>", lambda _: self._mostrar_pessoas())
         self.dica = tk.Label(self.quadro_cliente, text="Clique no cliente e em Confirmar, ou digite para buscar ou criar um novo.",
                              bg=CORES["card"], fg=CORES["mut"], font=("Segoe UI", 8), anchor="w", justify="left", wraplength=340)
         self.dica.pack(fill="x", pady=(4, 0))
+
+        # Quem está na chamada: pessoas já conhecidas do cliente (clique para marcar) ou um nome novo
+        tk.Label(self.quadro_cliente, text="Quem está na chamada com você?", bg=CORES["card"], fg=CORES["texto"],
+                 font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", pady=(10, 0))
+        self.pessoas_lista = tk.Listbox(self.quadro_cliente, height=4, selectmode="multiple", font=("Segoe UI", 10),
+                                        activestyle="none", bg=CORES["fundo"], fg=CORES["texto"],
+                                        selectbackground=CORES["azul"], selectforeground="#14171c", relief="flat",
+                                        highlightthickness=0, exportselection=False)
+        self.pessoas_lista.pack(fill="x", pady=(4, 4))
+        self.pessoas_lista.bind("<<ListboxSelect>>", lambda _: self._guardar_marcadas())
+        self.nova_pessoa = tk.Entry(self.quadro_cliente, font=("Segoe UI", 10), bg=CORES["fundo"], fg=CORES["texto"],
+                                    insertbackground=CORES["texto"], relief="flat")
+        self.nova_pessoa.pack(fill="x", ipady=4)
+        self.nova_pessoa.bind("<Return>", lambda _: self.adicionar_pessoa())
+        tk.Label(self.quadro_cliente, text="Clique nos nomes para marcar, ou digite um nome novo e aperte Enter.",
+                 bg=CORES["card"], fg=CORES["mut"], font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=(2, 0))
+        self._pessoas_por_cliente = {}
+        self._marcadas = []  # nomes marcados (em ordem)
+        self._digitadas = []  # nomes novos digitados nesta reunião
         self._nomes = []
         self._sugerido = None
         linha = tk.Frame(self.quadro_cliente, bg=CORES["card"])
@@ -141,6 +161,43 @@ class Janela:
                                 else "Clique no cliente, ou aperte Enter para usar o primeiro da lista.")
         else:
             self.dica.configure(text="Clique no cliente e em Confirmar, ou digite para buscar ou criar um novo.")
+        self._mostrar_pessoas()
+
+    # ---------------------------------------------------------- pessoas na chamada
+
+    def _cliente_escolhido(self) -> str | None:
+        selecionado = self.lista.curselection()
+        return self.lista.get(selecionado[0]) if selecionado else None
+
+    def _mostrar_pessoas(self):
+        """Pessoas do cliente marcado na lista + nomes digitados; mantém as marcações."""
+        nome = self._cliente_escolhido()
+        cid = self._clientes.get(nome.lower()) if nome else None
+        conhecidas = self._pessoas_por_cliente.get(str(cid), []) if cid else []
+        nomes = list(dict.fromkeys(conhecidas + self._digitadas + self._marcadas))
+        if list(self.pessoas_lista.get(0, "end")) != nomes:
+            self.pessoas_lista.delete(0, "end")
+            for n in nomes:
+                self.pessoas_lista.insert("end", n)
+        self.pessoas_lista.selection_clear(0, "end")
+        for i, n in enumerate(nomes):
+            if n in self._marcadas:
+                self.pessoas_lista.selection_set(i)
+
+    def _guardar_marcadas(self):
+        self._marcadas = [self.pessoas_lista.get(i) for i in self.pessoas_lista.curselection()]
+
+    def adicionar_pessoa(self):
+        nome = " ".join(self.nova_pessoa.get().split())
+        if nome:
+            existente = next((n for n in self.pessoas_lista.get(0, "end") if n.lower() == nome.lower()), None)
+            nome = existente or nome
+            if not existente:
+                self._digitadas.append(nome)
+            if nome not in self._marcadas:
+                self._marcadas.append(nome)
+        self.nova_pessoa.delete(0, "end")
+        self._mostrar_pessoas()
 
     def confirmar_cliente(self):
         selecionado = self.lista.curselection()
@@ -155,6 +212,8 @@ class Janela:
         self.enviar_cliente({"cliente_id": cid} if cid else {"novo": nome})
 
     def enviar_cliente(self, dados: dict):
+        self.adicionar_pessoa()  # nome digitado sem apertar Enter também vale
+        dados = {**dados, "pessoas": list(self._marcadas)}
         def enviar():
             req = urllib.request.Request(URL + "/api/cliente", method="POST", data=json.dumps(dados).encode(),
                                          headers={"Content-Type": "application/json"})
@@ -167,6 +226,10 @@ class Janela:
         nomes = [c["nome"] for c in e.get("clientes", [])]
         self._clientes = {c["nome"].lower(): c["id"] for c in e.get("clientes", [])}
         self._sugerido = next((c["nome"] for c in e.get("clientes", []) if c["id"] == e.get("cliente_sugerido")), None)
+        pessoas = e.get("pessoas_por_cliente", {})
+        if pessoas != self._pessoas_por_cliente:
+            self._pessoas_por_cliente = pessoas
+            self._mostrar_pessoas()
         if nomes != self._nomes:
             self._nomes = nomes
             atual = self.lista.get(self.lista.curselection()[0]) if self.lista.curselection() else self._sugerido
@@ -175,7 +238,10 @@ class Janela:
             self.mostrar_pergunta(True)
         else:
             self.mostrar_pergunta(False)
-            self.rotulo_cliente.configure(text=f"Cliente: {e.get('cliente') or 'sem cliente'}  (clique para trocar)")
+            self._marcadas = list(e.get("na_chamada", []))  # ao trocar, a lista volta com as marcações
+            com = f" · com {', '.join(self._marcadas)}" if self._marcadas else ""
+            self.rotulo_cliente.configure(text=f"Cliente: {e.get('cliente') or 'sem cliente'}{com}  (clique para trocar)",
+                                          wraplength=360, justify="left")
 
     def pedir(self):
         self.botao.configure(text="Pensando…", state="disabled")

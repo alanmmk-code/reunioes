@@ -68,6 +68,7 @@ def gerar_ata(transcricao: str, reuniao: dict) -> Ata:
         f"Título do evento: {reuniao.get('titulo', '')}\n"
         f"Data/hora de início: {reuniao.get('inicio', '')}\n"
         f"Convidados na agenda: {convidados}\n"
+        f"Pessoas na chamada (informadas pelo usuário): {', '.join(reuniao.get('na_chamada', [])) or 'não informado'}\n"
         f"Descrição do evento: {reuniao.get('descricao', '') or '(vazia)'}\n"
         f"Data de hoje: {datetime.now().strftime('%Y-%m-%d')}"
     )

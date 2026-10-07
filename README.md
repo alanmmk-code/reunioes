@@ -79,6 +79,8 @@ e começa a gravar) ou **● Gravar agora** para uma reunião fora da agenda. Ao
 - `WHISPER_MODELO` no `.env`: `small` (padrão) é rápido; `medium` ou `large-v3-turbo` são mais precisos
   e mais lentos.
 - Os áudios e transcrições ficam em `gravacoes/`. Apague os antigos quando quiser liberar espaço.
+- Ao terminar, os arquivos ganham um nome fácil de achar: `2026-10-07 15h49 - Cliente - com Fulano, Beltrano-voce.wav`
+  (data, cliente e quem estava na chamada). Se você trocar o cliente na tela "Gerar ata?", o nome acompanha.
 
 ### Extensão do Chrome: áudio só da reunião
 
@@ -95,7 +97,12 @@ notificações) e o início/fim da chamada é deduzido pelo microfone e pelo som
 2. **Carregar sem compactação** → escolha a pasta `extensao` deste projeto.
 3. Recarregue as abas do Meet que estiverem abertas.
 
-Depois de um `git pull` que mude a extensão, clique em **Atualizar** em `chrome://extensions`.
+**Gravar a tela da reunião:** numa chamada, o ícone da extensão mostra **TELA** (laranja). Clique nele: vira
+**REC** (vermelho) e o vídeo da aba do Meet (15 qps, ~540 MB por hora) é gravado até você sair da chamada (ou
+clicar de novo). O Chrome exige esse clique a cada reunião: extensão nenhuma pode filmar uma aba sozinha.
+O vídeo fica junto dos áudios (`…-tela.webm`, abre no Chrome) e não vai para o Drive.
+
+Depois de um `git pull` que mude a extensão, clique em **Atualizar** em `chrome://extensions` e recarregue a aba do Meet.
 A extensão fala com o painel em `http://127.0.0.1:5055` (se mudar a `PORTA`, ajuste `extensao/manifest.json`
 e `extensao/fundo.js`). Sem ela (Firefox, ou extensão desligada) o app continua gravando do jeito antigo.
 A sua voz continua vindo do microfone: use **fone de ouvido** para o som da chamada não vazar para ele.
@@ -147,7 +154,9 @@ A aba **Tarefas** continua para a gestão completa (filtros, tarefas do cliente,
 Quando uma chamada do Meet começa, a gravação inicia sozinha e abre uma **janelinha no canto da tela**:
 
 1. Ela pergunta **"Qual cliente é esta reunião?"** (sugere o cliente de reuniões anteriores com as mesmas
-   pessoas; dá para digitar um cliente novo).
+   pessoas; dá para digitar um cliente novo) e **"Quem está na chamada com você?"**: marque as pessoas já
+   conhecidas do cliente ou digite um nome novo. As pessoas ficam ligadas à empresa (aparecem na próxima reunião
+   com ela, nos dois PCs) e vão para a ata, para as sugestões e para o nome dos arquivos.
 2. Enquanto a conversa acontece, ela **sugere o que responder** sempre que alguém se dirige a você
    (pergunta, pedido de prazo, preço, opinião). O botão **"O que eu respondo?"** pede uma sugestão na hora.
    O assistente usa a pauta do convite, as tarefas em aberto do cliente e as atas anteriores.

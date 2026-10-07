@@ -274,6 +274,7 @@ def prompt_contexto(reuniao: dict | None) -> str:
     reuniao = reuniao or {}
     nomes = [config.SEU_NOME] if config.SEU_NOME and config.SEU_NOME != "Eu" else []
     nomes += [p.get("nome") for p in reuniao.get("participantes", []) if p.get("nome")]
+    nomes += reuniao.get("na_chamada", [])
     cli = db.cliente(reuniao.get("cliente_id"))
     if cli:
         nomes.append(cli["nome"])

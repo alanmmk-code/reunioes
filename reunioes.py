@@ -8,7 +8,7 @@ Uso:
 
 import json
 import re
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from html import escape
 import socket
 import subprocess
@@ -316,7 +316,67 @@ def encerrar_gravacao() -> tuple[dict, dict, str]:
         ao_vivo.parar()
     reuniao, arquivos = GRAVADOR.parar()
     GRAVADOR.automatica = False
+    try:
+        antigo = arquivos["voce"].name.removesuffix("-voce.wav")
+        novo = _renomear_arquivos(antigo, nome_da_gravacao(reuniao, _inicio_da_gravacao(antigo)))
+        arquivos = {n: c.with_name(novo + c.name[len(antigo):]) for n, c in arquivos.items()}
+    except Exception:
+        traceback.print_exc()  # fica com o nome técnico; nada se perde
     return reuniao, arquivos, ao_vivo.transcricao() if ao_vivo else ""
+
+
+# ---------------------------------------------------------------- Nome dos arquivos da gravação
+
+_PROIBIDOS_NO_NOME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# O que vem depois do nome-base nos arquivos de uma gravação
+_FIM_ARQUIVO_GRAVACAO = re.compile(r"(\.json|-(voce|outros|comparar)\.(wav|txt)|-tela(-\d+)?\.webm)")
+
+
+def _eh_da_gravacao(nome_arquivo: str, pid: str) -> bool:
+    return nome_arquivo.startswith(pid) and bool(_FIM_ARQUIVO_GRAVACAO.fullmatch(nome_arquivo[len(pid):]))
+
+
+def _inicio_da_gravacao(pid: str, dados: dict | None = None) -> datetime:
+    """Quando a gravação começou: do .json (gravações novas) ou do nome técnico (AAAAMMDD-HHMMSS-...)."""
+    try:
+        return datetime.fromisoformat((dados or {}).get("gravada_em") or "")
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(pid[:15], "%Y%m%d-%H%M%S")
+    except ValueError:
+        return datetime.now()
+
+
+def nome_da_gravacao(reuniao: dict, inicio: datetime) -> str:
+    """Nome fácil de achar na pasta: "2026-10-07 15h49 - Cliente - com Fulano, Beltrano"."""
+    cli = db.cliente(reuniao.get("cliente_id"))
+    partes = [f"{inicio:%Y-%m-%d %Hh%M}", cli["nome"] if cli else "sem cliente"]
+    if reuniao.get("na_chamada"):
+        partes.append("com " + ", ".join(reuniao["na_chamada"]))
+    nome = " ".join(_PROIBIDOS_NO_NOME.sub("", " - ".join(partes)).split())
+    while ".." in nome:
+        nome = nome.replace("..", ".")
+    return nome[:120].rstrip(". ")
+
+
+def _renomear_arquivos(antigo: str, novo: str) -> str:
+    """Troca o nome-base de todos os arquivos da gravação (áudios, vídeo, transcrição, .json).
+    Devolve o nome usado (com " (2)" se já existir outra gravação com o mesmo nome)."""
+    if not novo or novo == antigo:
+        return antigo
+    base, n = novo, 2
+    while any((config.GRAVACOES_DIR / f"{novo}{fim}").exists() for fim in (".json", "-voce.wav")):
+        novo, n = f"{base} ({n})", n + 1
+    trocados = []
+    for arq in list(config.GRAVACOES_DIR.iterdir()):
+        if _eh_da_gravacao(arq.name, antigo):
+            arq.rename(arq.with_name(novo + arq.name[len(antigo):]))
+            trocados.append(f"grav__{arq.name}")
+    if trocados:  # os outros PCs apagam a cópia com o nome antigo e baixam a nova
+        sincronia.marcar_excluido(*trocados)
+        sincronia.agendar()
+    return novo
 
 
 def ao_detectar_meet(titulo_janela: str, pela_extensao: bool = False) -> None:
@@ -332,20 +392,24 @@ def ao_detectar_meet(titulo_janela: str, pela_extensao: bool = False) -> None:
         monitor.notificar("Não consegui gravar a reunião", str(e)[:150])
 
 
-def ao_encerrar_meet() -> None:
+def ao_encerrar_meet() -> str | None:
+    """Encerra a gravação automática. Devolve o id da gravação pendente (None se não havia ou foi descartada)."""
     if not (GRAVADOR.ativo and GRAVADOR.automatica):
-        return
+        return None
     segundos = (datetime.now() - GRAVADOR.inicio).total_seconds()
     reuniao, arquivos, ao_vivo = encerrar_gravacao()
     if segundos < config.DURACAO_MINIMA_SEG:
         for c in arquivos.values():
             c.unlink(missing_ok=True)
         print(f"[monitor] gravação de {segundos:.0f}s descartada (curta demais)")
-        return
+        _vincular_telas(None)
+        return None
     pid = salvar_pendente(reuniao, arquivos, ao_vivo, segundos)
+    _vincular_telas(pid)
     print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; aguardando decisão sobre a ata")
     monitor.notificar("Reunião encerrada", "Quer gerar a ata? Abri a pergunta no navegador.")
-    webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{pid}")
+    webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{quote(pid)}")
+    return pid
 
 
 # ---------------------------------------------------------------- Extensão do Chrome (áudio só da aba do Meet)
@@ -353,7 +417,8 @@ def ao_encerrar_meet() -> None:
 # A extensão (pasta extensao/) avisa a cada segundo se a aba do Meet está numa chamada e manda o áudio
 # dos outros participantes. Com ela, a gravação começa e termina pela chamada de verdade, e a trilha
 # "outros" tem só o som da reunião (nada de outras abas ou programas).
-EXTENSAO = {"sinal_em": 0.0, "aba": None, "aba_sinal_em": 0.0, "fora_desde": None, "log_em": 0.0, "pico": 0.0}
+EXTENSAO = {"sinal_em": 0.0, "aba": None, "aba_sinal_em": 0.0, "fora_desde": None, "log_em": 0.0, "pico": 0.0,
+            "telas": {}}  # telas: aba -> arquivo do vídeo da aba (gravação da tela, opcional)
 EXTENSAO_ATIVA_SEG = 30  # sem sinal há mais que isso: extensão ausente, vale o detector antigo
 EXTENSAO_SEM_SINAL_FIM = 20  # gravando e a aba parou de mandar sinal (fechou, Chrome caiu): encerra
 _extensao_lock = threading.Lock()
@@ -388,7 +453,7 @@ def api_extensao_estado():
                 EXTENSAO["fora_desde"] = EXTENSAO["fora_desde"] or agora
                 if d.get("fim") or agora - EXTENSAO["fora_desde"] >= monitor.FIM_APOS:
                     EXTENSAO["fora_desde"], EXTENSAO["aba"] = None, None
-                    threading.Thread(target=ao_encerrar_meet, daemon=True).start()
+                    threading.Thread(target=_encerrar_pela_extensao, args=(aba,), daemon=True).start()
                     return {"ok": True, "gravando": False}
             return {"ok": True, "gravando": True}
         if em_chamada and not GRAVADOR.ativo:
@@ -408,6 +473,53 @@ def api_extensao_audio():
     return {"ok": True}
 
 
+@app.post("/api/extensao/tela")
+def api_extensao_tela():
+    """Vídeo da aba do Meet: pedaços WebM do MediaRecorder, em ordem. parte=0 começa um arquivo novo."""
+    aba, parte = request.args.get("aba", type=int), request.args.get("parte", type=int, default=1)
+    with _extensao_lock:
+        caminho = EXTENSAO["telas"].get(aba)
+        if parte == 0:
+            caminho = config.GRAVACOES_DIR / f"tela-{datetime.now():%Y%m%d-%H%M%S}-aba{aba}.webm"
+            EXTENSAO["telas"][aba] = caminho
+        elif caminho is None:
+            return {"ok": False}  # sem o começo do arquivo o vídeo não abre
+        with open(caminho, "ab") as f:
+            f.write(request.get_data())
+    return {"ok": True}
+
+
+@app.post("/api/extensao/erro")
+def api_extensao_erro():
+    d = request.get_json(silent=True) or {}
+    print(f"[extensao] erro em {str(d.get('onde'))[:40]}: {str(d.get('erro'))[:300]}")
+    return {"ok": True}
+
+
+def _vincular_telas(pid: str | None) -> None:
+    """Vídeos da tela gravados durante a gravação que terminou (ainda com nome provisório tela-*):
+    passam a se chamar <pid>-tela.webm, junto dos áudios (e são apagados junto).
+    Gravação descartada: apaga o vídeo."""
+    with _extensao_lock:
+        for aba, caminho in list(EXTENSAO["telas"].items()):
+            if not caminho.name.startswith("tela-") or not caminho.exists():
+                continue
+            if pid is None:
+                caminho.unlink(missing_ok=True)
+                EXTENSAO["telas"].pop(aba, None)
+                continue
+            novo = config.GRAVACOES_DIR / f"{pid}-tela.webm"
+            if novo.exists():  # duas abas gravando: a segunda ganha um sufixo
+                novo = config.GRAVACOES_DIR / f"{pid}-tela-{aba}.webm"
+            caminho.rename(novo)
+            EXTENSAO["telas"][aba] = novo  # pedaços que ainda chegarem vão para o arquivo novo
+            print(f"[extensao] vídeo da tela: {novo.name}")
+
+
+def _encerrar_pela_extensao(aba) -> None:
+    ao_encerrar_meet()
+
+
 def vigiar_extensao() -> None:
     """A aba sumiu sem avisar (fechou o Chrome, travou): encerra a gravação."""
     def loop():
@@ -416,8 +528,8 @@ def vigiar_extensao() -> None:
             try:
                 if _gravando_pela_extensao() and time.time() - EXTENSAO["aba_sinal_em"] > EXTENSAO_SEM_SINAL_FIM:
                     print("[extensao] a aba do Meet parou de responder; encerrando a gravação")
-                    EXTENSAO["aba"] = None
-                    ao_encerrar_meet()
+                    aba, EXTENSAO["aba"] = EXTENSAO["aba"], None
+                    _encerrar_pela_extensao(aba)
             except Exception:
                 traceback.print_exc()
     threading.Thread(target=loop, daemon=True, name="vigia-extensao").start()
@@ -428,6 +540,7 @@ def vigiar_extensao() -> None:
 def salvar_pendente(reuniao: dict, arquivos: dict, transcricao_ao_vivo: str, segundos: float) -> str:
     pid = arquivos["voce"].name.removesuffix("-voce.wav")
     dados = {"reuniao": {k: v for k, v in reuniao.items() if k != "anexos"},
+             "gravada_em": (datetime.now() - timedelta(seconds=segundos)).isoformat(timespec="seconds"),
              # só o nome: a pasta pode ser diferente em outro PC
              "arquivos": {n: c.name for n, c in arquivos.items()},
              "transcricao_ao_vivo": transcricao_ao_vivo, "minutos": round(segundos / 60),
@@ -750,7 +863,9 @@ def api_aovivo():
     estado = {"gravando": GRAVADOR.ativo, "duracao": GRAVADOR.duracao(), "titulo": r.get("titulo", ""),
               "assistente": bool(AO_VIVO), "cliente_definido": bool(r.get("cliente_definido")),
               "cliente": cli["nome"] if cli else None, "cliente_sugerido": r.get("cliente_sugerido"),
-              "clientes": [{"id": c["id"], "nome": c["nome"]} for c in db.clientes()]}
+              "clientes": [{"id": c["id"], "nome": c["nome"]} for c in db.clientes()],
+              "na_chamada": r.get("na_chamada", []),
+              "pessoas_por_cliente": {str(k): v for k, v in db.pessoas_por_cliente().items()}}
     if AO_VIVO:
         estado.update(AO_VIVO.estado())
     return estado
@@ -763,6 +878,16 @@ def api_cliente():
     cliente_id = dados.get("cliente_id")
     if isinstance(dados.get("novo"), str) and dados["novo"].strip():
         cliente_id = db.criar_cliente(dados["novo"])
+    pessoas = dados.get("pessoas")
+    if isinstance(pessoas, list):
+        # Quem está na chamada: fica na reunião (ata, assistente) e ligado ao cliente para as próximas
+        nomes = list(dict.fromkeys(" ".join(str(n).split())[:80] for n in pessoas if str(n).strip()))
+        if GRAVADOR.reuniao is not None:
+            GRAVADOR.reuniao["na_chamada"] = nomes
+        for nome in nomes:
+            db.adicionar_pessoa(cliente_id, nome)
+        if nomes and db.cliente(cliente_id):
+            sincronia.agendar()
     definir_cliente_da_gravacao(cliente_id)
     return {"ok": True}
 
@@ -805,6 +930,11 @@ def pendente_gerar(pid):
     p = carregar_pendente(pid)
     if p:
         p["reuniao"]["cliente_id"] = cliente_do_formulario()
+        # Cliente escolhido agora: o nome dos arquivos acompanha
+        novo = _renomear_arquivos(pid, nome_da_gravacao(p["reuniao"], _inicio_da_gravacao(pid, p)))
+        if novo != pid:
+            p["arquivos"] = {n: novo + Path(c).name[len(pid):] for n, c in p["arquivos"].items()}
+            pid = novo
         arquivos = _audios_da_pendente(p)
         if not arquivos and not p.get("transcricao_ao_vivo"):
             flash("O áudio desta reunião está em outro PC. Gere a ata por lá.")
@@ -999,8 +1129,8 @@ def followup(event_id):
 def excluir_arquivos_da_gravacao(pid: str) -> list[str]:
     """Apaga áudios e transcrição de uma gravação (não o .json, que guarda a decisão para os outros PCs)."""
     nomes = []
-    for arq in config.GRAVACOES_DIR.glob(f"{pid}*"):
-        if arq.suffix in (".wav", ".txt"):
+    for arq in list(config.GRAVACOES_DIR.iterdir()):  # sem glob: nome com [ ] confundiria o padrão
+        if _eh_da_gravacao(arq.name, pid) and arq.suffix in (".wav", ".txt", ".webm"):
             arq.unlink(missing_ok=True)
             nomes.append(f"grav__{arq.name}")
     if nomes:
