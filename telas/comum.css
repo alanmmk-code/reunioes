@@ -91,3 +91,10 @@ dialog.modal::backdrop{background:rgba(0,0,0,.45)}
 dialog.modal form{display:grid;gap:12px}
 .editar-cli{margin-top:8px}
 .editar-cli>summary{font-size:12.5px}
+/* marcar tarefa como feita (ficha do cliente) */
+.chk{appearance:none;-webkit-appearance:none;width:19px;height:19px;border:2px solid var(--bd);border-radius:50%;cursor:pointer;margin:0;padding:0;display:grid;place-items:center;background:var(--card);flex:none}
+.chk:hover{border-color:var(--ok)}
+.chk:checked{background:var(--ok);border-color:var(--ok)}
+.chk:checked::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px)}
+.li .feito{display:flex;align-items:center;gap:10px}
+.li .feito form{display:flex}

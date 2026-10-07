@@ -20,13 +20,13 @@
 
 <div class="fc-grid">
 <section class="box"><div class="box-h"><h2>Suas tarefas</h2><span class="mut">{{ c.minhas|length }}</span></div>
-{% for t in c.minhas %}<div class="li"><span>{{ t.descricao }}</span>
+{% for t in c.minhas %}<div class="li"><span class="feito"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}"><input type="hidden" name="status" value="feito"><input type="checkbox" class="chk" onchange="this.form.submit()" title="Marcar como feito"></form><span>{{ t.descricao }}</span></span>
 <span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>
 {% else %}<div class="li mut">Nada pendente do seu lado.</div>{% endfor %}</section>
 
 <section class="box"><div class="box-h"><h2>Pendências do cliente</h2>
 {% if c.dele %}<a class="mut" href="{{ url_for('cobrar', cliente_id=c.id) }}">Cobrar →</a>{% endif %}</div>
-{% for t in c.dele %}<div class="li"><span>{{ t.descricao }} <span class="mut">· {{ t.responsavel }}</span></span>
+{% for t in c.dele %}<div class="li"><span class="feito"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}"><input type="hidden" name="status" value="feito"><input type="checkbox" class="chk" onchange="this.form.submit()" title="Marcar como feito"></form><span>{{ t.descricao }} <span class="mut">· {{ t.responsavel }}</span></span></span>
 <span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>
 {% else %}<div class="li mut">Nada pendente do lado do cliente.</div>{% endfor %}</section>
 
