@@ -166,12 +166,13 @@ def notificar(titulo: str, mensagem: str, url: str | None = None) -> None:
         pass
 
 
-def iniciar(ao_detectar, ao_encerrar, gravando_automatico) -> None:
+def iniciar(ao_detectar, ao_encerrar, gravando_automatico, extensao_ativa=lambda: False) -> None:
     """Roda em segundo plano.
 
     ao_detectar(titulo_janela): chamado quando uma chamada do Meet começa
     ao_encerrar(): chamado quando a chamada termina
     gravando_automatico(): True se há uma gravação iniciada por este monitor
+    extensao_ativa(): True se a extensão do Chrome está numa aba do Meet (aí é ela quem inicia a gravação)
     """
 
     def loop():
@@ -192,7 +193,8 @@ def iniciar(ao_detectar, ao_encerrar, gravando_automatico) -> None:
                             fora_desde = None
                             ultimo_titulo = None
                             ao_encerrar()
-                elif em_chamada and ultimo_titulo and time.time() - visto_em <= MEMORIA_TITULO:
+                elif (em_chamada and ultimo_titulo and time.time() - visto_em <= MEMORIA_TITULO
+                      and not extensao_ativa()):
                     ao_detectar(ultimo_titulo)
                     ultimo_titulo = None  # não dispara de novo para a mesma chamada
             except Exception as e:

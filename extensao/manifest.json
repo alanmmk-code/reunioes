@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Assistente de Reuniões - Meet",
+  "version": "1.0",
+  "description": "Envia ao painel do Assistente de Reuniões (localhost:5055) quando você está numa chamada do Meet e o áudio só dessa aba.",
+  "background": { "service_worker": "fundo.js" },
+  "host_permissions": ["http://127.0.0.1:5055/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["pagina.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["ponte.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

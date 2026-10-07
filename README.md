@@ -80,6 +80,26 @@ e começa a gravar) ou **● Gravar agora** para uma reunião fora da agenda. Ao
   e mais lentos.
 - Os áudios e transcrições ficam em `gravacoes/`. Apague os antigos quando quiser liberar espaço.
 
+### Extensão do Chrome: áudio só da reunião
+
+Sem a extensão, a trilha "Outros participantes" grava **todo o som do PC** (vídeos em outras abas, música,
+notificações) e o início/fim da chamada é deduzido pelo microfone e pelo som do navegador. Com a extensão:
+
+- A trilha dos outros tem **só o áudio da aba do Meet** (as vozes dos participantes, direto da chamada).
+- A gravação começa quando a chamada conecta e termina quando você sai, mesmo entrando com o microfone
+  desligado, trocando de aba ou com outra aba tocando som.
+
+**Instalar (uma vez em cada PC, Chrome ou Edge):**
+
+1. Abra `chrome://extensions` e ligue o **Modo do desenvolvedor** (canto superior direito).
+2. **Carregar sem compactação** → escolha a pasta `extensao` deste projeto.
+3. Recarregue as abas do Meet que estiverem abertas.
+
+Depois de um `git pull` que mude a extensão, clique em **Atualizar** em `chrome://extensions`.
+A extensão fala com o painel em `http://127.0.0.1:5055` (se mudar a `PORTA`, ajuste `extensao/manifest.json`
+e `extensao/fundo.js`). Sem ela (Firefox, ou extensão desligada) o app continua gravando do jeito antigo.
+A sua voz continua vindo do microfone: use **fone de ouvido** para o som da chamada não vazar para ele.
+
 ### Painel: tudo numa tela só
 
 A página inicial do painel (http://localhost:5055) reúne tudo:

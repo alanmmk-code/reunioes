@@ -210,12 +210,12 @@ def _reuniao_da_janela(titulo_janela: str) -> dict:
             "inicio": datetime.now().isoformat(timespec="minutes"), "descricao": "", "participantes": []}
 
 
-def iniciar_gravacao(reuniao: dict, automatica: bool) -> None:
+def iniciar_gravacao(reuniao: dict, automatica: bool, pela_extensao: bool = False) -> None:
     """Começa a gravar, liga o assistente ao vivo e abre a janelinha de sugestões."""
     global AO_VIVO
     reuniao.setdefault("cliente_id", None)
     reuniao["cliente_sugerido"] = sugerir_cliente(reuniao)
-    GRAVADOR.iniciar(reuniao)
+    GRAVADOR.iniciar(reuniao, pela_extensao=pela_extensao)
     GRAVADOR.automatica = automatica
     if config.ASSISTENTE_AO_VIVO:
         AO_VIVO = assistente.AoVivo(GRAVADOR, reuniao)
@@ -319,13 +319,13 @@ def encerrar_gravacao() -> tuple[dict, dict, str]:
     return reuniao, arquivos, ao_vivo.transcricao() if ao_vivo else ""
 
 
-def ao_detectar_meet(titulo_janela: str) -> None:
+def ao_detectar_meet(titulo_janela: str, pela_extensao: bool = False) -> None:
     if GRAVADOR.ativo:
         return
     reuniao = _reuniao_da_janela(titulo_janela)
     try:
-        iniciar_gravacao(reuniao, automatica=True)
-        print(f"[monitor] gravando: {reuniao['titulo']}")
+        iniciar_gravacao(reuniao, automatica=True, pela_extensao=pela_extensao)
+        print(f"[{'extensao' if pela_extensao else 'monitor'}] gravando: {reuniao['titulo']}")
         monitor.notificar("Gravando reunião", f"{reuniao['titulo']} — o assistente está ouvindo.")
     except Exception as e:
         traceback.print_exc()
@@ -346,6 +346,81 @@ def ao_encerrar_meet() -> None:
     print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; aguardando decisão sobre a ata")
     monitor.notificar("Reunião encerrada", "Quer gerar a ata? Abri a pergunta no navegador.")
     webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{pid}")
+
+
+# ---------------------------------------------------------------- Extensão do Chrome (áudio só da aba do Meet)
+
+# A extensão (pasta extensao/) avisa a cada segundo se a aba do Meet está numa chamada e manda o áudio
+# dos outros participantes. Com ela, a gravação começa e termina pela chamada de verdade, e a trilha
+# "outros" tem só o som da reunião (nada de outras abas ou programas).
+EXTENSAO = {"sinal_em": 0.0, "aba": None, "aba_sinal_em": 0.0, "fora_desde": None, "log_em": 0.0, "pico": 0.0}
+EXTENSAO_ATIVA_SEG = 30  # sem sinal há mais que isso: extensão ausente, vale o detector antigo
+EXTENSAO_SEM_SINAL_FIM = 20  # gravando e a aba parou de mandar sinal (fechou, Chrome caiu): encerra
+_extensao_lock = threading.Lock()
+
+
+def extensao_ativa() -> bool:
+    return time.time() - EXTENSAO["sinal_em"] <= EXTENSAO_ATIVA_SEG
+
+
+def _gravando_pela_extensao() -> bool:
+    return GRAVADOR.ativo and GRAVADOR.automatica and GRAVADOR.pela_extensao
+
+
+@app.post("/api/extensao/estado")
+def api_extensao_estado():
+    d = request.get_json(silent=True) or {}
+    aba, em_chamada, titulo = d.get("aba"), bool(d.get("em_chamada")), d.get("titulo") or "Meet"
+    agora = time.time()
+    with _extensao_lock:
+        EXTENSAO["sinal_em"] = agora
+        if _gravando_pela_extensao():
+            if aba != EXTENSAO["aba"]:
+                return {"ok": True, "gravando": False}  # outra aba do Meet: ignora
+            EXTENSAO["aba_sinal_em"] = agora
+            EXTENSAO["pico"] = max(EXTENSAO["pico"], float(d.get("pico") or 0))
+            if agora - EXTENSAO["log_em"] >= 30:  # diagnóstico: o áudio da aba está chegando?
+                print(f"[extensao] trilhas={d.get('trilhas')} áudio={d.get('audio_ctx')} pico 30s={EXTENSAO['pico']:.3f}")
+                EXTENSAO["log_em"], EXTENSAO["pico"] = agora, 0.0
+            if em_chamada:
+                EXTENSAO["fora_desde"] = None
+            else:
+                EXTENSAO["fora_desde"] = EXTENSAO["fora_desde"] or agora
+                if d.get("fim") or agora - EXTENSAO["fora_desde"] >= monitor.FIM_APOS:
+                    EXTENSAO["fora_desde"], EXTENSAO["aba"] = None, None
+                    threading.Thread(target=ao_encerrar_meet, daemon=True).start()
+                    return {"ok": True, "gravando": False}
+            return {"ok": True, "gravando": True}
+        if em_chamada and not GRAVADOR.ativo:
+            EXTENSAO.update(aba=aba, aba_sinal_em=agora, fora_desde=None)
+            ao_detectar_meet(titulo, pela_extensao=True)
+            return {"ok": True, "gravando": GRAVADOR.ativo and GRAVADOR.pela_extensao}
+    return {"ok": True, "gravando": False}
+
+
+@app.post("/api/extensao/audio")
+def api_extensao_audio():
+    """PCM 16 kHz mono, int16 little-endian, da aba que está sendo gravada."""
+    if _gravando_pela_extensao() and request.args.get("aba", type=int) == EXTENSAO["aba"]:
+        import numpy as np
+
+        GRAVADOR.alimentar_outros(np.frombuffer(request.get_data(), dtype="<i2").astype(np.float32) / 32768.0)
+    return {"ok": True}
+
+
+def vigiar_extensao() -> None:
+    """A aba sumiu sem avisar (fechou o Chrome, travou): encerra a gravação."""
+    def loop():
+        while True:
+            time.sleep(5)
+            try:
+                if _gravando_pela_extensao() and time.time() - EXTENSAO["aba_sinal_em"] > EXTENSAO_SEM_SINAL_FIM:
+                    print("[extensao] a aba do Meet parou de responder; encerrando a gravação")
+                    EXTENSAO["aba"] = None
+                    ao_encerrar_meet()
+            except Exception:
+                traceback.print_exc()
+    threading.Thread(target=loop, daemon=True, name="vigia-extensao").start()
 
 
 # ---------------------------------------------------------------- Gravações aguardando decisão
@@ -1342,7 +1417,10 @@ if __name__ == "__main__":
             log = open(config.BASE_DIR / "reunioes.log", "a", encoding="utf-8", buffering=1)
             sys.stdout = sys.stderr = log
         if config.GRAVACAO_AUTOMATICA:
-            monitor.iniciar(ao_detectar_meet, ao_encerrar_meet, lambda: GRAVADOR.ativo and GRAVADOR.automatica)
+            monitor.iniciar(ao_detectar_meet, ao_encerrar_meet,
+                            lambda: GRAVADOR.ativo and GRAVADOR.automatica and not GRAVADOR.pela_extensao,
+                            extensao_ativa)
+            vigiar_extensao()
             print("[monitor] vigiando chamadas do Meet")
         vigiar_janela()
         sincronia.iniciar_automatico()
