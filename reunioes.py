@@ -158,6 +158,11 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
         TAREFA.update(etapa="Escrevendo a ata com o Claude", pct=100, transcricao_salva=str(txt))
         processar(reuniao, texto, f"Gravação no PC + Whisper ({config.WHISPER_MODELO})")
         TAREFA.update(etapa="Concluído")
+        # Ata pronta e a reunião tem vídeo com áudio: os áudios separados não são mais necessários
+        voce = arquivos.get("voce")
+        if voce is not None and voce.with_name(voce.name.removesuffix("-voce.wav") + ".webm").exists():
+            for c in arquivos.values():
+                c.unlink(missing_ok=True)
         if avisar:
             monitor.notificar("Ata pronta", f"{reuniao.get('titulo', '')} — abrindo suas tarefas")
             webbrowser.open(f"http://localhost:{config.PORTA}{tarefas_da_ata(reuniao['id'])}")
@@ -329,7 +334,7 @@ def encerrar_gravacao() -> tuple[dict, dict, str]:
 
 _PROIBIDOS_NO_NOME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # O que vem depois do nome-base nos arquivos de uma gravação
-_FIM_ARQUIVO_GRAVACAO = re.compile(r"(\.json|-(voce|outros|comparar)\.(wav|txt)|-tela(-\d+)?\.webm)")
+_FIM_ARQUIVO_GRAVACAO = re.compile(r"(\.json|-(voce|outros|comparar)\.(wav|txt)|(-tela)?(-\d+)?\.webm)")
 
 
 def _eh_da_gravacao(nome_arquivo: str, pid: str) -> bool:
@@ -396,7 +401,8 @@ def ao_encerrar_meet() -> str | None:
     """Encerra a gravação automática. Devolve o id da gravação pendente (None se não havia ou foi descartada)."""
     if not (GRAVADOR.ativo and GRAVADOR.automatica):
         return None
-    segundos = (datetime.now() - GRAVADOR.inicio).total_seconds()
+    inicio = GRAVADOR.inicio
+    segundos = (datetime.now() - inicio).total_seconds()
     reuniao, arquivos, ao_vivo = encerrar_gravacao()
     if segundos < config.DURACAO_MINIMA_SEG:
         for c in arquivos.values():
@@ -405,7 +411,9 @@ def ao_encerrar_meet() -> str | None:
         _vincular_telas(None)
         return None
     pid = salvar_pendente(reuniao, arquivos, ao_vivo, segundos)
-    _vincular_telas(pid)
+    videos = _vincular_telas(pid)
+    if videos:
+        threading.Thread(target=_juntar_audio_nos_videos, args=(pid, videos, inicio, arquivos), daemon=True).start()
     print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; aguardando decisão sobre a ata")
     monitor.notificar("Reunião encerrada", "Quer gerar a ata? Abri a pergunta no navegador.")
     webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{quote(pid)}")
@@ -418,7 +426,7 @@ def ao_encerrar_meet() -> str | None:
 # dos outros participantes. Com ela, a gravação começa e termina pela chamada de verdade, e a trilha
 # "outros" tem só o som da reunião (nada de outras abas ou programas).
 EXTENSAO = {"sinal_em": 0.0, "aba": None, "aba_sinal_em": 0.0, "fora_desde": None, "log_em": 0.0, "pico": 0.0,
-            "telas": {}}  # telas: aba -> arquivo do vídeo da aba (gravação da tela, opcional)
+            "telas": {}, "telas_inicio": {}}  # telas: aba -> vídeo da aba (gravação da tela); quando começou
 EXTENSAO_ATIVA_SEG = 30  # sem sinal há mais que isso: extensão ausente, vale o detector antigo
 EXTENSAO_SEM_SINAL_FIM = 20  # gravando e a aba parou de mandar sinal (fechou, Chrome caiu): encerra
 _extensao_lock = threading.Lock()
@@ -482,6 +490,9 @@ def api_extensao_tela():
         if parte == 0:
             caminho = config.GRAVACOES_DIR / f"tela-{datetime.now():%Y%m%d-%H%M%S}-aba{aba}.webm"
             EXTENSAO["telas"][aba] = caminho
+            # Quando o vídeo começou (para alinhar com o áudio); sem a informação: 5 s antes (1º pedaço)
+            inicio_ms = request.args.get("inicio", type=float)
+            EXTENSAO["telas_inicio"][aba] = inicio_ms / 1000 if inicio_ms else time.time() - 5
         elif caminho is None:
             return {"ok": False}  # sem o começo do arquivo o vídeo não abre
         with open(caminho, "ab") as f:
@@ -496,10 +507,11 @@ def api_extensao_erro():
     return {"ok": True}
 
 
-def _vincular_telas(pid: str | None) -> None:
+def _vincular_telas(pid: str | None) -> list[tuple]:
     """Vídeos da tela gravados durante a gravação que terminou (ainda com nome provisório tela-*):
     passam a se chamar <pid>-tela.webm, junto dos áudios (e são apagados junto).
-    Gravação descartada: apaga o vídeo."""
+    Gravação descartada: apaga o vídeo. Devolve [(aba, vídeo, início do vídeo em epoch)]."""
+    vinculados = []
     with _extensao_lock:
         for aba, caminho in list(EXTENSAO["telas"].items()):
             if not caminho.name.startswith("tela-") or not caminho.exists():
@@ -513,7 +525,36 @@ def _vincular_telas(pid: str | None) -> None:
                 novo = config.GRAVACOES_DIR / f"{pid}-tela-{aba}.webm"
             caminho.rename(novo)
             EXTENSAO["telas"][aba] = novo  # pedaços que ainda chegarem vão para o arquivo novo
+            vinculados.append((aba, novo, EXTENSAO["telas_inicio"].get(aba)))
             print(f"[extensao] vídeo da tela: {novo.name}")
+    return vinculados
+
+
+def _juntar_audio_nos_videos(pid: str, videos: list[tuple], inicio_audio: datetime, arquivos: dict) -> None:
+    """O vídeo da tela vem sem som: quando ele termina de chegar, vira <pid>.webm com o áudio da reunião
+    (você + outros). O vídeo mudo é apagado; os .wav ficam até a ata ser gerada."""
+    for i, (aba, video, inicio_video) in enumerate(videos):
+        try:
+            # Espera os últimos pedaços (a extensão para o vídeo ao sair da chamada)
+            tamanho, parado_desde, limite = -1, time.time(), time.time() + 90
+            while time.time() < limite and time.time() - parado_desde < 8:
+                atual = video.stat().st_size if video.exists() else -1
+                if atual != tamanho:
+                    tamanho, parado_desde = atual, time.time()
+                time.sleep(1)
+            if not video.exists():
+                continue
+            saida = config.GRAVACOES_DIR / (f"{pid}.webm" if i == 0 else f"{pid}-{i + 1}.webm")
+            audios = [arquivos[n] for n in ("voce", "outros") if n in arquivos and arquivos[n].exists()]
+            atraso = (inicio_video or video.stat().st_ctime) - inicio_audio.timestamp()
+            gravador.juntar_audio_no_video(video, audios, saida, atraso)
+            with _extensao_lock:
+                video.unlink(missing_ok=True)
+                if EXTENSAO["telas"].get(aba) == video:
+                    EXTENSAO["telas"].pop(aba, None)
+            print(f"[extensao] vídeo com áudio: {saida.name}")
+        except Exception:
+            traceback.print_exc()  # fica o vídeo mudo + os áudios separados
 
 
 def _encerrar_pela_extensao(aba) -> None:

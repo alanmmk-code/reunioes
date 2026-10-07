@@ -11,3 +11,4 @@ numpy
 pycaw
 psutil
 pywin32
+imageio-ffmpeg

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Assistente de Reuniões - Meet",
-  "version": "1.3",
+  "version": "1.4",
   "description": "Envia ao painel do Assistente de Reuniões (localhost:5055) quando você está numa chamada do Meet, o áudio só dessa aba e, se você clicar no ícone, o vídeo da aba.",
   "background": { "service_worker": "fundo.js" },
   "permissions": ["tabCapture", "offscreen", "storage", "activeTab"],

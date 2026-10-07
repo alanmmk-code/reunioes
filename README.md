@@ -100,7 +100,10 @@ notificações) e o início/fim da chamada é deduzido pelo microfone e pelo som
 **Gravar a tela da reunião:** numa chamada, o ícone da extensão mostra **TELA** (laranja). Clique nele: vira
 **REC** (vermelho) e o vídeo da aba do Meet (15 qps, ~540 MB por hora) é gravado até você sair da chamada (ou
 clicar de novo). O Chrome exige esse clique a cada reunião: extensão nenhuma pode filmar uma aba sozinha.
-O vídeo fica junto dos áudios (`…-tela.webm`, abre no Chrome) e não vai para o Drive.
+Ao terminar a reunião, o painel junta o som da conversa (você + outros) ao vídeo: fica um único arquivo
+`<data> - <cliente> - com <pessoas>.webm` (abre no Chrome). Os áudios separados (`.wav`) continuam até a ata ser
+gerada (a transcrição precisa deles para saber quem falou) e depois são apagados. O vídeo não vai para o Drive.
+Para juntar o som usa o ffmpeg do pacote `imageio-ffmpeg` (instalado com o `requirements.txt`).
 
 Depois de um `git pull` que mude a extensão, clique em **Atualizar** em `chrome://extensions` e recarregue a aba do Meet.
 A extensão fala com o painel em `http://127.0.0.1:5055` (se mudar a `PORTA`, ajuste `extensao/manifest.json`

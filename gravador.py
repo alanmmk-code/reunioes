@@ -242,6 +242,26 @@ class Gravador:
         return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
+def juntar_audio_no_video(video, audios: list, saida, atraso_seg: float) -> None:
+    """O vídeo da tela vem sem som: mistura as trilhas (você + outros) e põe no vídeo, sem recodificar a imagem.
+    atraso_seg: quanto tempo depois do início da gravação de áudio o vídeo começou (negativo: começou antes)."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(video)]
+    for a in audios:
+        # Alinha o áudio com o vídeo: corta o começo do áudio (vídeo começou depois) ou atrasa o áudio
+        cmd += (["-ss", f"{atraso_seg:.3f}"] if atraso_seg >= 0 else ["-itsoffset", f"{-atraso_seg:.3f}"]) + ["-i", str(a)]
+    entradas = "".join(f"[{i + 1}:a]" for i in range(len(audios)))
+    mistura = f"{entradas}amix=inputs={len(audios)}:duration=longest:normalize=0[a]" if len(audios) > 1 else f"{entradas}anull[a]"
+    cmd += ["-filter_complex", mistura, "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "libopus", "-b:a", "64k",
+            "-shortest", str(saida)]
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        raise RuntimeError(f"ffmpeg: {r.stderr.strip()[-300:]}")
+
+
 def _ler_wav(caminho) -> np.ndarray:
     """Lê o WAV 16 kHz mono gravado acima como float32 (formato que o Whisper aceita direto)."""
     with wave.open(str(caminho), "rb") as wav:

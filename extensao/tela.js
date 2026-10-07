@@ -23,12 +23,13 @@ async function iniciar(aba, streamId) {
   }
   const tipo = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t));
   const rec = new MediaRecorder(stream, { mimeType: tipo, videoBitsPerSecond: 1200000 }); // ~540 MB por hora
-  let parte = 0, fila = Promise.resolve();
+  let parte = 0, fila = Promise.resolve(), inicio = 0;
   rec.ondataavailable = (e) => {
     if (!e.data.size) return;
     const n = parte++;
+    const extra = n === 0 ? `&inicio=${inicio}` : ""; // para o painel alinhar o som com o vídeo
     // Em ordem: os pedaços juntos formam um único arquivo WebM
-    fila = fila.then(() => fetch(`${PAINEL}/api/extensao/tela?aba=${aba}&parte=${n}`, { method: "POST", body: e.data })
+    fila = fila.then(() => fetch(`${PAINEL}/api/extensao/tela?aba=${aba}&parte=${n}${extra}`, { method: "POST", body: e.data })
       .catch(() => {}));
   };
   rec.onstop = () => {
@@ -39,6 +40,7 @@ async function iniciar(aba, streamId) {
   // A aba fechou: a captura acaba sozinha
   stream.getVideoTracks()[0].addEventListener("ended", () => rec.state !== "inactive" && rec.stop());
   rec.start(5000); // um pedaço a cada 5 s
+  inicio = Date.now();
   gravadores.set(aba, rec);
 }
 
