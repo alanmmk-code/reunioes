@@ -442,7 +442,9 @@ def _gravando_pela_extensao() -> bool:
 
 @app.post("/api/extensao/estado")
 def api_extensao_estado():
-    d = request.get_json(silent=True) or {}
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        d = {}
     aba, em_chamada, titulo = d.get("aba"), bool(d.get("em_chamada")), d.get("titulo") or "Meet"
     agora = time.time()
     with _extensao_lock:
@@ -451,7 +453,10 @@ def api_extensao_estado():
             if aba != EXTENSAO["aba"]:
                 return {"ok": True, "gravando": False}  # outra aba do Meet: ignora
             EXTENSAO["aba_sinal_em"] = agora
-            EXTENSAO["pico"] = max(EXTENSAO["pico"], float(d.get("pico") or 0))
+            try:
+                EXTENSAO["pico"] = max(EXTENSAO["pico"], float(d.get("pico") or 0))
+            except (TypeError, ValueError):
+                pass
             if agora - EXTENSAO["log_em"] >= 30:  # diagnóstico: o áudio da aba está chegando?
                 print(f"[extensao] trilhas={d.get('trilhas')} áudio={d.get('audio_ctx')} pico 30s={EXTENSAO['pico']:.3f}")
                 EXTENSAO["log_em"], EXTENSAO["pico"] = agora, 0.0
@@ -502,7 +507,9 @@ def api_extensao_tela():
 
 @app.post("/api/extensao/erro")
 def api_extensao_erro():
-    d = request.get_json(silent=True) or {}
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        d = {}
     print(f"[extensao] erro em {str(d.get('onde'))[:40]}: {str(d.get('erro'))[:300]}")
     return {"ok": True}
 

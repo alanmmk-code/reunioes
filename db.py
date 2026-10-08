@@ -73,6 +73,9 @@ def criar_tabelas() -> None:
             con.execute("ALTER TABLE clientes ADD COLUMN emails TEXT NOT NULL DEFAULT ''")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_clientes_uuid ON clientes(uuid)")
         con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_tarefas_uuid ON tarefas(uuid)")
+        # descrição vazia grava como o mesclar normaliza (senão os PCs nunca ficam iguais); sem mexer no
+        # atualizado_em, para cada PC corrigir a própria cópia sem disputar versão
+        con.execute("UPDATE tarefas SET descricao = ? WHERE trim(coalesce(descricao, '')) = ''", (SEM_DESCRICAO,))
         con.execute(
             """CREATE TABLE IF NOT EXISTS notas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,6 +216,13 @@ def _prazo_valido(prazo) -> str | None:
         return None  # "A definir" e afins
 
 
+SEM_DESCRICAO = "(sem descrição)"
+
+
+def _descricao(descricao) -> str:
+    return str(descricao or "").strip() or SEM_DESCRICAO
+
+
 def _cliente_existente(con, cliente_id) -> int | None:
     cliente_id = _id(cliente_id)
     if cliente_id and con.execute("SELECT 1 FROM clientes WHERE id = ?", (cliente_id,)).fetchone():
@@ -226,7 +236,7 @@ def criar_tarefa(cliente_id, descricao, responsavel="", minha=True, prazo=None, 
         return con.execute(
             "INSERT INTO tarefas (cliente_id, descricao, responsavel, minha, prazo, origem_ata, origem_titulo, "
             "criada_em, uuid, atualizado_em) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (_cliente_existente(con, cliente_id), str(descricao or "").strip(), str(responsavel or "").strip(),
+            (_cliente_existente(con, cliente_id), _descricao(descricao), str(responsavel or "").strip(),
              int(bool(minha)), _prazo_valido(prazo), origem_ata, origem_titulo, momento, _uuid.uuid4().hex, momento),
         ).lastrowid
 
@@ -253,6 +263,8 @@ def atualizar_tarefa(tarefa_id, **campos) -> None:
         return
     permitidos = {"descricao", "responsavel", "minha", "prazo", "status", "cliente_id"}
     campos = {k: v for k, v in campos.items() if k in permitidos}
+    if "descricao" in campos:
+        campos["descricao"] = _descricao(campos["descricao"])
     if "prazo" in campos:
         campos["prazo"] = _prazo_valido(campos["prazo"])
     if "status" in campos:
@@ -436,6 +448,25 @@ def _aplicar(con, local: dict, remoto: dict) -> bool:
     return True
 
 
+def _cliente_novo(con, c: dict) -> bool:
+    """Cliente remoto cujo uuid não existe aqui: entra, ou une com o daqui de mesmo nome."""
+    mesmo_nome = con.execute("SELECT * FROM clientes WHERE nome = ?", (c["nome"],)).fetchone()
+    if not mesmo_nome:
+        con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (c["uuid"], c["nome"], c["emails"], c["criado_em"], c["atualizado_em"], c["excluido"]))
+        return True
+    # mesmo cliente com outro uuid: fica o menor, valem os dados mais recentes
+    local = dict(mesmo_nome)
+    canonico = min(local["uuid"], c["uuid"])
+    novo = _mais_recente(local, c)
+    con.execute("UPDATE clientes SET uuid = ?, nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
+                (canonico, novo["nome"], novo.get("emails") or "", int(novo.get("excluido") or 0),
+                 novo["atualizado_em"], local["id"]))
+    _apelidar(con, c["uuid"] if canonico == local["uuid"] else local["uuid"], canonico)
+    return True
+
+
 def exportar() -> dict:
     """Tudo (inclusive excluídos), com o cliente referenciado pelo uuid — igual em todos os PCs."""
     with conexao() as con:
@@ -457,7 +488,7 @@ def exportar() -> dict:
 def _tarefa_limpa(t: dict) -> list:
     """Valores de uma tarefa vinda de outro PC, normalizados como o próprio sistema grava."""
     v = {c: t.get(c) for c in CAMPOS_TAREFA}
-    v["descricao"] = str(v["descricao"] or "").strip() or "(sem descrição)"
+    v["descricao"] = _descricao(v["descricao"])
     v["responsavel"] = str(v["responsavel"] or "")
     v["minha"] = int(bool(v["minha"]))
     v["prazo"] = _prazo_valido(v["prazo"]) if v["prazo"] else None
@@ -491,33 +522,23 @@ def mesclar(remoto: dict) -> int:
                 else:
                     con.execute("UPDATE clientes SET uuid = ? WHERE id = ?", (_canonico(con, ap["para"]), antigo["id"]))
 
-        # 2) clientes
-        for c in sorted(remoto.get("clientes", []) or [], key=lambda x: str(x.get("uuid"))):
-            if not c.get("uuid"):
-                continue
-            c = {**c, "uuid": _canonico(con, c["uuid"]), "nome": str(c.get("nome") or "").strip() or "(sem nome)",
-                 "emails": _limpar_emails(c.get("emails")), "excluido": int(bool(c.get("excluido"))),
-                 "atualizado_em": c.get("atualizado_em") or "", "criado_em": c.get("criado_em") or agora()}
-            local = con.execute("SELECT * FROM clientes WHERE uuid = ?", (c["uuid"],)).fetchone()
-            if local:
-                mudou += _aplicar(con, dict(local), c)
-                continue
-            mesmo_nome = con.execute("SELECT * FROM clientes WHERE nome = ?", (c["nome"],)).fetchone()
-            if not mesmo_nome:
-                con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
-                            (c["uuid"], c["nome"], c["emails"], c["criado_em"], c["atualizado_em"], c["excluido"]))
-                mudou += 1
-                continue
-            # mesmo cliente com outro uuid: fica o menor, valem os dados mais recentes
-            local = dict(mesmo_nome)
-            canonico = min(local["uuid"], c["uuid"])
-            novo = _mais_recente(local, c)
-            con.execute("UPDATE clientes SET uuid = ?, nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
-                        (canonico, novo["nome"], novo.get("emails") or "", int(novo.get("excluido") or 0),
-                         novo["atualizado_em"], local["id"]))
-            _apelidar(con, c["uuid"] if canonico == local["uuid"] else local["uuid"], canonico)
-            mudou += 1
+        # 2) clientes: primeiro as versões dos que já existem aqui (pelo uuid), depois os novos — assim
+        # uma renomeação mais recente vale antes de unir por nome, e a ordem do arquivo não muda o resultado
+        remotos = [c for c in sorted(remoto.get("clientes", []) or [], key=lambda x: str(x.get("uuid")))
+                   if c.get("uuid")]
+        pendentes = []
+        for passo in (1, 2):
+            for c in (remotos if passo == 1 else pendentes):
+                c = {**c, "uuid": _canonico(con, c["uuid"]), "nome": str(c.get("nome") or "").strip() or "(sem nome)",
+                     "emails": _limpar_emails(c.get("emails")), "excluido": int(bool(c.get("excluido"))),
+                     "atualizado_em": c.get("atualizado_em") or "", "criado_em": c.get("criado_em") or agora()}
+                local = con.execute("SELECT * FROM clientes WHERE uuid = ?", (c["uuid"],)).fetchone()
+                if local:
+                    mudou += _aplicar(con, dict(local), c)
+                elif passo == 1:
+                    pendentes.append(c)
+                else:
+                    mudou += _cliente_novo(con, c)
 
         def id_local(cliente_uuid):
             if not cliente_uuid:
