@@ -106,6 +106,29 @@ def precisam_de_atencao(limite: int = 6) -> list[dict]:
     return [c for c in todos_os_clientes() if c["motivos"]][:limite]
 
 
+def agrupar_pendencias(tarefas: list[dict], reunioes_cli: list[dict], nome_cliente: str = "") -> dict:
+    """Pendências do cliente agrupadas por reunião (mais recente primeiro) e por pessoa."""
+    inicio = {r["event_id"]: r["reuniao"].get("inicio", "") for r in reunioes_cli}
+    por_reuniao: dict[str, dict] = {}
+    for t in tarefas:
+        chave = t["origem_ata"] or ""
+        if chave not in por_reuniao:
+            data = inicio.get(chave, "")
+            rotulo = t["origem_titulo"] or "Sem reunião de origem"
+            if nome_cliente and rotulo.lower().startswith(nome_cliente.lower()):  # a ficha já é do cliente
+                rotulo = rotulo[len(nome_cliente):].lstrip(" –—-:") or rotulo
+            por_reuniao[chave] = {"rotulo": (f"{data[8:10]}/{data[5:7]} · " if data else "") + rotulo,
+                                  "data": data, "itens": []}
+        t["data_reuniao"] = f"{inicio[chave][8:10]}/{inicio[chave][5:7]}" if inicio.get(chave) else ""
+        por_reuniao[chave]["itens"].append(t)
+    por_pessoa: dict[str, dict] = {}
+    for t in tarefas:
+        nome = (t["responsavel"] or "").strip() or "Sem responsável"
+        por_pessoa.setdefault(nome.lower(), {"rotulo": nome, "itens": []})["itens"].append(t)
+    return {"reuniao": sorted(por_reuniao.values(), key=lambda g: g["data"], reverse=True),
+            "pessoa": sorted(por_pessoa.values(), key=lambda g: (-len(g["itens"]), g["rotulo"].lower()))}
+
+
 # ---------------------------------------------------------------- cobrança
 
 def texto_cobranca(cliente_id) -> dict:

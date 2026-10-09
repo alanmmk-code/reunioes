@@ -24,11 +24,20 @@
 <span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>
 {% else %}<div class="li mut">Nada pendente do seu lado.</div>{% endfor %}</section>
 
-<section class="box"><div class="box-h"><h2>Pendências do cliente</h2>
-{% if c.dele %}<a class="mut" href="{{ url_for('cobrar', cliente_id=c.id) }}">Cobrar →</a>{% endif %}</div>
-{% for t in c.dele %}<div class="li"><span class="feito"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}"><input type="hidden" name="status" value="feito"><input type="checkbox" class="chk" onchange="this.form.submit()" title="Marcar como feito"></form><span>{{ t.descricao }} <span class="mut">· {{ t.responsavel }}</span></span></span>
-<span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>
-{% else %}<div class="li mut">Nada pendente do lado do cliente.</div>{% endfor %}</section>
+{% macro pendencia(t, extra) %}<div class="li"><span class="feito"><form method="post" action="{{ url_for('tarefa_atualizar', tarefa_id=t.id) }}"><input type="hidden" name="status" value="feito"><input type="checkbox" class="chk" onchange="this.form.submit()" title="Marcar como feito"></form><span>{{ t.descricao }}{% if extra %} <span class="mut">· {{ extra }}</span>{% endif %}</span></span>
+<span class="due {{ 'atr' if t.atrasada else ('hj' if t.hoje else '') }}">{% if t.prazo %}{{ t.prazo[8:10] }}/{{ t.prazo[5:7] }}{% else %}sem prazo{% endif %}</span></div>{% endmacro %}
+<section class="box" id="pend-cli"><div class="box-h"><h2>Pendências do cliente</h2>
+<span style="display:flex;align-items:center;gap:10px">{% if c.dele %}<span class="seg"><button type="button" data-modo="reuniao" class="on">Por reunião</button><button type="button" data-modo="pessoa">Por pessoa</button></span>
+<a class="mut" href="{{ url_for('cobrar', cliente_id=c.id) }}">Cobrar →</a>{% endif %}</span></div>
+{% for modo in ['reuniao', 'pessoa'] %}<div class="pend-modo" data-modo="{{ modo }}"{% if modo == 'pessoa' %} hidden{% endif %}>
+{% for g in grupos[modo] %}<div class="grp">{{ g.rotulo }} <span>{{ g.itens|length }}</span></div>
+{% for t in g.itens %}{{ pendencia(t, t.responsavel if modo == 'reuniao' else t.data_reuniao) }}{% endfor %}{% endfor %}</div>{% endfor %}
+{% if not c.dele %}<div class="li mut">Nada pendente do lado do cliente.</div>{% endif %}</section>
+<script>(()=>{const box=document.getElementById('pend-cli');if(!box)return;
+const usar=m=>{box.querySelectorAll('.pend-modo').forEach(d=>d.hidden=d.dataset.modo!==m);
+box.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.modo===m))};
+let m=null;try{m=localStorage.getItem('pend-modo')}catch(e){}if(m==='pessoa')usar(m);
+box.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{usar(b.dataset.modo);try{localStorage.setItem('pend-modo',b.dataset.modo)}catch(e){}}))})()</script>
 
 <section class="box"><div class="box-h"><h2>Próximas reuniões</h2></div>
 {% for e in proximas %}<div class="li"><span>{{ e.titulo }} <span class="mut">· {{ e.inicio[8:10] }}/{{ e.inicio[5:7] }} {{ e.inicio[11:16] }}</span></span>

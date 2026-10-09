@@ -717,6 +717,13 @@ details>summary{cursor:pointer;list-style:none}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--bd)}.dot.on{background:var(--ok)}.dot.err{background:var(--err)}
 @media (max-width:600px){.sinc span:not(.dot){display:none}}
 {{ css_comum|safe }}details>summary::-webkit-details-marker{display:none}
+/* pendências do cliente agrupadas (ficha do cliente) */
+.grp{display:flex;justify-content:space-between;gap:10px;padding:8px 16px;background:var(--card2);border-bottom:1px solid var(--bd);font-size:12.5px;font-weight:600;color:var(--tx2)}
+.grp span{color:var(--mut);font-weight:500}
+.seg{display:inline-flex;border:1px solid var(--bd);border-radius:8px;overflow:hidden}
+.seg button{background:var(--card);color:var(--mut);border:0;border-radius:0;padding:3px 10px;font-size:12px}
+.seg button.on{background:var(--pri-s);color:var(--pri)}
+.seg button:hover{filter:none;color:var(--tx)}
 </style></head><body>
 <header class="top"><div class="in">
 <a class="logo" href="{{ url_for('inicio') }}"><i>R</i>Reuniões</a>

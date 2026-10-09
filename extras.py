@@ -44,9 +44,10 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
         reunioes_cli = clientes.atas_do_cliente(cliente_id)
         for r in reunioes_cli:
             r["breve"] = breve(r["ata"].get("resumo", ""))
+        resumo = clientes.resumo_cliente(c)
         return pagina(
             _tela("cliente.html"),
-            c=clientes.resumo_cliente(c), contatos=clientes.contatos(cliente_id), reunioes=reunioes_cli,
+            c=resumo, grupos=clientes.agrupar_pendencias(resumo["dele"], reunioes_cli, c["nome"]), contatos=clientes.contatos(cliente_id), reunioes=reunioes_cli,
             proximas=clientes.proximas_reunioes(cliente_id, _eventos(0, 30), sugerir_cliente),
             notas=db.notas(cliente_id), resposta=None,
         )
