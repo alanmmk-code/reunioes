@@ -9,7 +9,7 @@ Proteção: fora do banco real (testes, Agenor) nada é enviado.
 
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import config
@@ -152,6 +152,14 @@ def enviar_email(remetente: str, destinatarios, assunto: str, html: str) -> list
     return para
 
 
+def _hora_outlook(inicio: datetime) -> datetime:
+    """Horário para o Start do Outlook. O pywin32 converte a hora local para UTC antes de passar ao
+    Outlook, que a lê como hora local (a reunião ia 3h adiantada); marcada como UTC, ela passa sem mudar."""
+    if inicio.tzinfo:
+        inicio = inicio.astimezone()
+    return inicio.replace(tzinfo=timezone.utc, second=0, microsecond=0)
+
+
 def _calendario_da_conta(ol, conta):
     try:
         return conta.DeliveryStore.GetDefaultFolder(OL_FOLDER_CALENDAR)
@@ -174,7 +182,7 @@ def enviar_convite(remetente: str, convidados, titulo: str, inicio: datetime, du
         item = _calendario_da_conta(ol, conta).Items.Add(OL_APPOINTMENT)
         item.MeetingStatus = OL_MEETING
         item.Subject = titulo
-        item.Start = inicio.replace(tzinfo=None, second=0, microsecond=0)
+        item.Start = _hora_outlook(inicio)
         item.Duration = int(duracao_min)
         item.Location = link_meet or ""
         item.Body = (f"Entrar no Google Meet: {link_meet}\n\n" if link_meet else "") + (pauta or "")
@@ -199,7 +207,7 @@ def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo:
 
     def atualizar(ol):
         item = ol.GetNamespace("MAPI").GetItemFromID(entry_id)
-        item.Start = inicio.replace(tzinfo=None, second=0, microsecond=0)
+        item.Start = _hora_outlook(inicio)
         item.Duration = int(duracao_min)
         if titulo:
             item.Subject = titulo
