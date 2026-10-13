@@ -431,40 +431,69 @@ def _unir_registros(con, a: dict, b: dict) -> None:
     _apelidar(con, sai["uuid"], canonico)
 
 
-def _aplicar(con, local: dict, remoto: dict) -> bool:
-    """Leva para o registro local a versão remota, se for mais recente. Devolve se mudou algo."""
-    if _mais_recente(local, remoto) is local:
-        return False
-    novos = (remoto["nome"], remoto.get("emails") or "", int(remoto.get("excluido") or 0), remoto["atualizado_em"])
-    if novos == (local["nome"], local.get("emails") or "", int(local.get("excluido") or 0), local["atualizado_em"]):
-        return False
-    outro = con.execute("SELECT * FROM clientes WHERE nome = ? AND id != ?", (remoto["nome"], local["id"])).fetchone()
-    if outro:  # renomeado para o nome de outro cliente: são o mesmo
-        _unir_registros(con, {**local, "nome": remoto["nome"], "emails": novos[1], "excluido": novos[2],
-                              "atualizado_em": novos[3]}, dict(outro))
-    else:
-        con.execute("UPDATE clientes SET nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
-                    (*novos, local["id"]))
-    return True
+_MINUSCULAS_ASCII = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 
 
-def _cliente_novo(con, c: dict) -> bool:
-    """Cliente remoto cujo uuid não existe aqui: entra, ou une com o daqui de mesmo nome."""
-    mesmo_nome = con.execute("SELECT * FROM clientes WHERE nome = ?", (c["nome"],)).fetchone()
-    if not mesmo_nome:
-        con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (c["uuid"], c["nome"], c["emails"], c["criado_em"], c["atualizado_em"], c["excluido"]))
-        return True
-    # mesmo cliente com outro uuid: fica o menor, valem os dados mais recentes
-    local = dict(mesmo_nome)
-    canonico = min(local["uuid"], c["uuid"])
-    novo = _mais_recente(local, c)
-    con.execute("UPDATE clientes SET uuid = ?, nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
-                (canonico, novo["nome"], novo.get("emails") or "", int(novo.get("excluido") or 0),
-                 novo["atualizado_em"], local["id"]))
-    _apelidar(con, c["uuid"] if canonico == local["uuid"] else local["uuid"], canonico)
-    return True
+def _chave_nome(nome: str) -> str:
+    """Nomes iguais para o UNIQUE COLLATE NOCASE do SQLite (que só ignora maiúsculas de A a Z)."""
+    return nome.translate(_MINUSCULAS_ASCII)
+
+
+def _mesclar_clientes(con, remotos: list[dict]) -> int:
+    """Junta os clientes daqui com os de outro PC de uma vez só: primeiro a versão mais recente de cada uuid,
+    depois une os que terminam com o mesmo nome. Como só o resultado final conta, a ordem não importa."""
+    locais = {r["uuid"]: dict(r) for r in con.execute("SELECT * FROM clientes")}
+    versoes = dict(locais)
+    for c in remotos:
+        atual = versoes.get(c["uuid"])
+        versoes[c["uuid"]] = c if atual is None else _mais_recente(atual, c)
+
+    grupos: dict[str, list[dict]] = {}
+    for v in versoes.values():
+        grupos.setdefault(_chave_nome(v["nome"]), []).append(v)
+
+    plano = []  # (id local que fica ou None, valores finais, ids locais que saem)
+    for membros in grupos.values():
+        canonico = min(m["uuid"] for m in membros)
+        dados = membros[0]
+        for m in membros[1:]:
+            dados = _mais_recente(dados, m)
+        com_linha = sorted((m["uuid"] for m in membros if m["uuid"] in locais), key=lambda u: u != canonico)
+        fica = locais[com_linha[0]]["id"] if com_linha else None
+        sai = [locais[u]["id"] for u in com_linha[1:]]
+        final = {"uuid": canonico, "nome": dados["nome"], "emails": dados.get("emails") or "",
+                 "excluido": int(dados.get("excluido") or 0), "atualizado_em": dados.get("atualizado_em") or "",
+                 "criado_em": dados.get("criado_em") or agora()}
+        plano.append((fica, final, sai))
+        for m in membros:
+            _apelidar(con, m["uuid"], canonico)
+
+    campos = ("uuid", "nome", "emails", "excluido", "atualizado_em")
+    por_id = {c["id"]: c for c in locais.values()}
+    mudam = [(fica, final) for fica, final, _ in plano
+             if fica is not None and tuple(por_id[fica][k] or "" if k != "excluido" else int(por_id[fica][k] or 0)
+                                            for k in campos) != tuple(final[k] for k in campos)]
+    mudou = 0
+    # nomes provisórios antes de renomear, para o UNIQUE não esbarrar no meio da troca
+    for fica, final in mudam:
+        con.execute("UPDATE clientes SET nome = ?, uuid = ? WHERE id = ?", ("" + str(fica), "" + str(fica), fica))
+    for fica, _final, sai in plano:
+        for velho in sai:
+            for tabela in ("tarefas", "notas", "pessoas"):
+                con.execute(f"UPDATE {tabela} SET cliente_id = ? WHERE cliente_id = ?", (fica, velho))
+            con.execute("DELETE FROM clientes WHERE id = ?", (velho,))
+            mudou += 1
+    for fica, final in mudam:
+        con.execute("UPDATE clientes SET uuid = ?, nome = ?, emails = ?, excluido = ?, atualizado_em = ? WHERE id = ?",
+                    (*(final[k] for k in campos), fica))
+        mudou += 1
+    for fica, final, _sai in plano:
+        if fica is None:
+            con.execute("INSERT INTO clientes (uuid, nome, emails, criado_em, atualizado_em, excluido) "
+                        "VALUES (?, ?, ?, ?, ?, ?)", (final["uuid"], final["nome"], final["emails"], final["criado_em"],
+                                                      final["atualizado_em"], final["excluido"]))
+            mudou += 1
+    return mudou
 
 
 def exportar() -> dict:
@@ -496,7 +525,16 @@ def _tarefa_limpa(t: dict) -> list:
     v["excluido"] = int(bool(v["excluido"]))
     v["criada_em"] = v["criada_em"] or v["atualizado_em"] or agora()
     v["atualizado_em"] = v["atualizado_em"] or ""
+    v["concluida_em"] = (v["concluida_em"] or v["atualizado_em"] or v["criada_em"]) if v["status"] == "feito" else None
     return [v[c] for c in CAMPOS_TAREFA]
+
+
+def _registros(remoto: dict, chave: str) -> list[dict]:
+    """Os itens de uma lista do arquivo de outro PC que são registros com uuid (ignora o resto)."""
+    lista = remoto.get(chave)
+    if not isinstance(lista, list):
+        return []
+    return [r for r in lista if isinstance(r, dict) and r.get("uuid") and isinstance(r["uuid"], str)]
 
 
 def mesclar(remoto: dict) -> int:
@@ -507,8 +545,9 @@ def mesclar(remoto: dict) -> int:
     mudou = 0
     with conexao() as con:
         # 1) apelidos (uniões feitas no outro PC)
-        for ap in remoto.get("apelidos", []) or []:
-            if not ap.get("uuid") or not ap.get("para") or ap["uuid"] == ap["para"]:
+        for ap in _registros(remoto, "apelidos"):
+            # a união sempre aponta para o menor uuid; o contrário só viria de arquivo estragado e faria ciclo
+            if not isinstance(ap.get("para"), str) or not ap["para"] or ap["para"] >= ap["uuid"]:
                 continue
             if con.execute("SELECT 1 FROM clientes_alias WHERE uuid = ? AND para = ?", (ap["uuid"], ap["para"])).fetchone():
                 continue
@@ -522,23 +561,13 @@ def mesclar(remoto: dict) -> int:
                 else:
                     con.execute("UPDATE clientes SET uuid = ? WHERE id = ?", (_canonico(con, ap["para"]), antigo["id"]))
 
-        # 2) clientes: primeiro as versões dos que já existem aqui (pelo uuid), depois os novos — assim
-        # uma renomeação mais recente vale antes de unir por nome, e a ordem do arquivo não muda o resultado
-        remotos = [c for c in sorted(remoto.get("clientes", []) or [], key=lambda x: str(x.get("uuid")))
-                   if c.get("uuid")]
-        pendentes = []
-        for passo in (1, 2):
-            for c in (remotos if passo == 1 else pendentes):
-                c = {**c, "uuid": _canonico(con, c["uuid"]), "nome": str(c.get("nome") or "").strip() or "(sem nome)",
-                     "emails": _limpar_emails(c.get("emails")), "excluido": int(bool(c.get("excluido"))),
-                     "atualizado_em": c.get("atualizado_em") or "", "criado_em": c.get("criado_em") or agora()}
-                local = con.execute("SELECT * FROM clientes WHERE uuid = ?", (c["uuid"],)).fetchone()
-                if local:
-                    mudou += _aplicar(con, dict(local), c)
-                elif passo == 1:
-                    pendentes.append(c)
-                else:
-                    mudou += _cliente_novo(con, c)
+        # 2) clientes
+        remotos = []
+        for c in _registros(remoto, "clientes"):
+            remotos.append({"uuid": _canonico(con, c["uuid"]), "nome": str(c.get("nome") or "").strip() or "(sem nome)",
+                            "emails": _limpar_emails(c.get("emails")), "excluido": int(bool(c.get("excluido"))),
+                            "atualizado_em": c.get("atualizado_em") or "", "criado_em": c.get("criado_em") or agora()})
+        mudou += _mesclar_clientes(con, remotos)
 
         def id_local(cliente_uuid):
             if not cliente_uuid:
@@ -547,9 +576,7 @@ def mesclar(remoto: dict) -> int:
             return r["id"] if r else None
 
         # 3) tarefas
-        for t in remoto.get("tarefas", []) or []:
-            if not t.get("uuid"):
-                continue
+        for t in _registros(remoto, "tarefas"):
             local = con.execute("SELECT atualizado_em FROM tarefas WHERE uuid = ?", (t["uuid"],)).fetchone()
             valores = _tarefa_limpa(t)
             if not local:
@@ -563,9 +590,7 @@ def mesclar(remoto: dict) -> int:
                 mudou += 1
 
         # 4) anotações
-        for n in remoto.get("notas", []) or []:
-            if not n.get("uuid"):
-                continue
+        for n in _registros(remoto, "notas"):
             local = con.execute("SELECT atualizado_em FROM notas WHERE uuid = ?", (n["uuid"],)).fetchone()
             texto = str(n.get("texto") or "")
             if not local:
@@ -581,9 +606,9 @@ def mesclar(remoto: dict) -> int:
                 mudou += 1
 
         # 5) pessoas dos clientes
-        for p in remoto.get("pessoas", []) or []:
+        for p in _registros(remoto, "pessoas"):
             nome = " ".join(str(p.get("nome") or "").split())[:80]
-            if not p.get("uuid") or not nome:
+            if not nome:
                 continue
             cid = id_local(p.get("cliente_uuid"))
             local = con.execute("SELECT atualizado_em FROM pessoas WHERE uuid = ?", (p["uuid"],)).fetchone()
