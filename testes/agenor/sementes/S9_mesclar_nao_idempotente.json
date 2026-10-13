@@ -1,0 +1,17 @@
+{
+ "semente": "1003",
+ "passos": [
+  30,
+  62,
+  63,
+  78,
+  81,
+  87,
+  99,
+  103
+ ],
+ "chave": "S9-mesclar-nao-idempotente",
+ "carimbo": "b2f630baac55",
+ "msg": "A: 2a mesclagem do mesmo export mudou 1",
+ "catalogo": "v1"
+}

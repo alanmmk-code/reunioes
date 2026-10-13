@@ -1,0 +1,16 @@
+{
+ "semente": "1003",
+ "passos": [
+  76,
+  80,
+  142,
+  146,
+  166,
+  194,
+  199
+ ],
+ "chave": "S1-mesclar-estoura:IntegrityError",
+ "carimbo": "b2f630baac55",
+ "msg": "B.mesclar(export de A): IntegrityError: UNIQUE constraint failed: clientes.nome",
+ "catalogo": "v1"
+}

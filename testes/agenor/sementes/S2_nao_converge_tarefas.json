@@ -1,0 +1,16 @@
+{
+ "semente": "1004",
+ "passos": [
+  12,
+  58,
+  59,
+  60,
+  67,
+  69,
+  71,
+  109
+ ],
+ "chave": "S2-nao-converge:tarefas",
+ "carimbo": "b2f630baac55",
+ "msg": "apos 2 rodadas A e B seguem diferentes: tarefa 1996d3: campos ['cliente']; tarefa 2bca62: campos ['cliente']; tarefa 86d1da: campos ['cliente']; tarefa 908da7: campos ['cliente']"
+}

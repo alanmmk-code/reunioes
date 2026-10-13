@@ -1,0 +1,15 @@
+{
+ "semente": "1010",
+ "passos": [
+  2,
+  15,
+  16,
+  27,
+  28,
+  31
+ ],
+ "chave": "S16-mesclar-depende-da-ordem",
+ "catalogo": "v2",
+ "carimbo": "8c8a2663f9d2",
+ "msg": "renomear dois clientes trocando nomes entre si: aplicar uma versao por vez unia pelo nome provisorio"
+}

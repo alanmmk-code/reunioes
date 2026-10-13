@@ -1,0 +1,20 @@
+{
+ "semente": "1002",
+ "passos": [
+  3,
+  4,
+  5,
+  6,
+  9,
+  82,
+  83,
+  93,
+  94,
+  102,
+  103
+ ],
+ "chave": "S16-mesclar-depende-da-ordem",
+ "catalogo": "v2",
+ "carimbo": "8c8a2663f9d2",
+ "msg": "B renomeia R->Zeta (nome no A) e p->R: cadeia de unioes dependia da ordem"
+}

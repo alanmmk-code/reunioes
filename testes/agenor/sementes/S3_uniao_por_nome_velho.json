@@ -1,0 +1,17 @@
+{
+ "semente": "2017",
+ "passos": [
+  61,
+  63,
+  66,
+  72,
+  75,
+  77,
+  79,
+  87
+ ],
+ "chave": "S3-converge-so-na-2a-rodada (uniao por nome com versao velha)",
+ "catalogo": "v2",
+ "carimbo": "8c8a2663f9d2",
+ "msg": "B renomeia cliente X->Gama (mais novo) e cria R; A ainda tem X como R (mais velho): mesclar une X e R pelo nome velho, Gama some; so converge na 2a rodada e mesclar(A);mesclar(B) != mesclar(B);mesclar(A)"
+}

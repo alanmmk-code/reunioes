@@ -1,0 +1,10 @@
+{
+ "semente": "1000",
+ "passos": [
+  145
+ ],
+ "chave": "H5",
+ "carimbo": "b2f630baac55",
+ "msg": "_apagar_local('grav__../fora.json') apagou um arquivo FORA de atas/gravacoes",
+ "catalogo": "v1"
+}

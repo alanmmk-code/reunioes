@@ -1,0 +1,12 @@
+{
+ "semente": "1002",
+ "passos": [
+  446,
+  467,
+  468
+ ],
+ "chave": "S3-converge-so-na-2a-rodada",
+ "carimbo": "b2f630baac55",
+ "msg": "a 1a troca nos dois sentidos nao igualou os bancos: cliente 4890a1: A=('<b>', 0, '2030-01-01T00:00:00.301+00:00') B=('<b>', 0, '2030-01-01T00:00:00.285+00:00')",
+ "catalogo": "v1"
+}

@@ -1,0 +1,10 @@
+{
+ "semente": "1001",
+ "passos": [
+  9
+ ],
+ "chave": "E4-tarefa-orfa",
+ "carimbo": "b2f630baac55",
+ "msg": "B: tarefa 1 aponta para o cliente 3, que nao existe",
+ "catalogo": "v1"
+}
