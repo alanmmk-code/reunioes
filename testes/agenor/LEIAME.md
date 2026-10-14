@@ -30,6 +30,19 @@ orfa, `tarefas()` nunca devolve excluida, atrasada/hoje/dias coerentes, unicidad
 Insercao (dentro da acao): I1..I10, S1..S9 (mesclar nao estoura, converge, nao perde, mais recente vence, exclusao nao
 desfaz, idempotente), H1..H4 (hostis), R1/R2 (rota estoura / 5xx).
 
+## Catalogos
+`v1` = acoes.py, `v2` = v1 + acoes2.py (clientes/sincronia), `v3` = v2 + acoes3.py (pessoas dos clientes, remarcar,
+envios presos no Outlook, extensao sem gravacao). Cada um CONGELADO quando o seguinte nasce: acao nova vai num catalogo
+novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v3.
+Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
+certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
+S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).
+
+## Reducao rapida
+O ddmin de 800 passos pode passar de 10 min. Antes: bissecar o passo do achado e testar `[passo]` e pares `[k, passo]`
+(quase sempre basta). Para recapturar um defeito ja consertado, `AGENOR_ALVO` numa copia do commit anterior
+(`git archive HEAD`), sem mexer na arvore de trabalho.
+
 ## Antes de relatar um achado
 Pergunte: e do sistema ou do oraculo? A propriedade e de estado ou de insercao? O gerador e legitimo? A semente NAO
 atravessa mudanca de `acoes.py` (o corpus carimba o catalogo e avisa).

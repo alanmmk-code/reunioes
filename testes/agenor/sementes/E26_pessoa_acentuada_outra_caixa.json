@@ -1,0 +1,10 @@
+{
+ "semente": "1000",
+ "passos": [
+  152
+ ],
+ "chave": "E26-pessoa-repetida-no-cliente:nao-ascii",
+ "catalogo": "v3",
+ "carimbo": "e0182d65ea8f",
+ "msg": "A e B ligam 'João'/'JOÃO' ao mesmo cliente e trocam: o NOCASE do SQLite so cobre A-Z e a pessoa ficava duas vezes"
+}

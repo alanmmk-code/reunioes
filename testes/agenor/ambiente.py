@@ -154,7 +154,7 @@ def _evento(i, dias, meet=True, dia_inteiro=False):
             "fim": (ini + timedelta(hours=1)).isoformat(), "dia_inteiro": False,
             "link": "https://meet.example/abc" if meet else None, "link_agenda": None, "codigo_meet": "abc",
             "participantes": [{"email": "a@x.com", "nome": "A", "resposta": ""}], "anexos": [],
-            "ja_terminou": dias < 0}
+            "ja_terminou": dias < 0, "organizador": i % 2 == 1}
 
 
 def _listar_eventos(ini, fim):
@@ -164,6 +164,22 @@ def _listar_eventos(ini, fim):
 g.listar_eventos = _listar_eventos
 g.listar_reunioes = lambda dias_atras=7, dias_frente=7: [e for e in EVENTOS if e["link"]]
 g.obter_reuniao = lambda eid: next((e for e in EVENTOS if e["id"] == eid and e["link"]), None)
+REMARCADOS = []  # (event_id, inicio, duracao, titulo, avisar) de cada remarcar_evento
+
+
+def _obter_evento(eid):
+    e = next((x for x in EVENTOS if x["id"] == eid), None)
+    return e and {**e, "organizador": e.get("organizador", False), "participantes": [p["email"] for p in e["participantes"]]}
+
+
+def _remarcar_evento(event_id, inicio, duracao_min, titulo=None, avisar=True):
+    inicio + timedelta(minutes=duracao_min)  # como o real: o fim tem de caber no calendario
+    REMARCADOS.append((event_id, inicio, duracao_min, titulo, avisar))
+    return {"link_evento": "https://x", "link_meet": "https://y"}
+
+
+g.obter_evento = _obter_evento
+g.remarcar_evento = _remarcar_evento
 g.criar_google_doc = lambda titulo, html: "https://docs.google.com/document/d/" + "A" * 25 + "/edit"
 LIXEIRA = []
 g.drive_lixeira = lambda fid: LIXEIRA.append(fid)
@@ -229,6 +245,7 @@ def novo_mundo(semente):
     EVENTOS[:] = [_evento(1, 0), _evento(2, -1), _evento(3, 2, meet=False), _evento(4, 1, dia_inteiro=True), _evento(5, 3)]
     EMAILS.clear()
     ENVIOS.clear()
+    REMARCADOS.clear()
     LIXEIRA.clear()
     reunioes.TAREFA.update(ativa=False, etapa="", pct=0, erro=None, event_id=None)
     entrar("A")

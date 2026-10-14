@@ -3,6 +3,10 @@
   "/",
   "/api/aovivo",
   "/api/cliente",
+  "/api/extensao/audio",
+  "/api/extensao/erro",
+  "/api/extensao/estado",
+  "/api/extensao/tela",
   "/api/janela/abrir",
   "/api/janela/fechada",
   "/api/sugerir",
@@ -18,6 +22,7 @@
   "/clientes/<int:cliente_id>",
   "/clientes/<int:cliente_id>/editar",
   "/clientes/novo",
+  "/envio/<int:envio_id>/<acao>",
   "/evento/<event_id>/ocultar",
   "/gerar/<event_id>",
   "/gravacao",
@@ -30,6 +35,7 @@
   "/pendente/<pid>/gerar",
   "/perguntar",
   "/resumo/<event_id>",
+  "/reuniao/<event_id>/remarcar",
   "/reuniao/nova",
   "/semana",
   "/sincronizar",
@@ -39,6 +45,7 @@
  ],
  "funcoes": [
   "ClienteDuplicado",
+  "adicionar_pessoa",
   "atualizar_cliente",
   "atualizar_tarefa",
   "cliente",
@@ -56,6 +63,8 @@
   "mesclar",
   "mover_tarefas_da_ata",
   "notas",
+  "pessoas",
+  "pessoas_por_cliente",
   "renomear_cliente",
   "tarefas"
  ]

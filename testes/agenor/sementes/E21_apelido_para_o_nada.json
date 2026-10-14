@@ -1,0 +1,10 @@
+{
+ "semente": "1003",
+ "passos": [
+  17
+ ],
+ "chave": "E21-apelido-aponta-para-nada:estranho",
+ "catalogo": "v3",
+ "carimbo": "e0182d65ea8f",
+ "msg": "export estragado com apelido para um uuid que nao e cliente em nenhum dos PCs: era aceito"
+}

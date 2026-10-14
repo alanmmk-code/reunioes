@@ -66,6 +66,7 @@ def estado(m):
                 vis = {n["id"] for n in db.notas(c["id"])}
                 cobrar(vis == {n["id"] for n in nts if n["cliente_id"] == c["id"] and not n["excluido"]}, "E18-notas()-incoerente", f"{pc}: cliente {c['id']}")
         _estado_clientes(pc, clis)
+        _estado_pessoas(pc)
         cobrar(len({c["uuid"] for c in clis}) == len(clis), "E11-uuid-cliente-repetido", pc)
         cobrar(len({t["uuid"] for t in tars}) == len(tars), "E12-uuid-tarefa-repetido", pc)
         nomes = [c["nome"].lower() for c in clis]
@@ -81,6 +82,22 @@ def estado(m):
             cobrar("ata" in reg and "reuniao" in reg, "E16-ata-sem-campos", f"{pc}: {arq.name}")
     amb.entrar("A")
     amb.SUJOS.clear()
+
+
+def _estado_pessoas(pc):
+    """E26/E27: uma pessoa so uma vez por cliente (sem diferenciar maiusculas, inclusive acentuadas); listas coerentes."""
+    if not _tem_tabela("pessoas"):
+        return
+    import unicodedata
+    vivas = [p for p in linhas("pessoas") if not p["excluido"] and p["cliente_id"] is not None]
+    chaves = [(p["cliente_id"], unicodedata.normalize("NFC", p["nome"]).casefold()) for p in vivas]
+    rep = sorted({k for k in chaves if chaves.count(k) > 1})
+    cobrar(not rep, "E26-pessoa-repetida-no-cliente", f"{pc}: {rep[:2]}",
+           "E26-pessoa-repetida-no-cliente" + ("" if all(n.isascii() for _, n in rep) else ":nao-ascii"))
+    por = db.pessoas_por_cliente()
+    for cid in {p["cliente_id"] for p in vivas} | set(por):
+        cobrar(sorted(db.pessoas(cid)) == sorted(p["nome"] for p in vivas if p["cliente_id"] == cid) == sorted(por.get(cid, [])),
+               "E27-pessoas-listas-incoerentes", f"{pc}: cliente {cid}")
 
 
 def _estado_clientes(pc, clis):
