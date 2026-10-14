@@ -106,6 +106,7 @@ def criar_tabelas() -> None:
         chaves = [_chave_nome(r["nome"]) for r in con.execute("SELECT nome FROM clientes")]
         if len(set(chaves)) != len(chaves):
             _mesclar_clientes(con, [])
+        _unificar_pessoas(con)
 
 
 # ---------------------------------------------------------------- validação
@@ -389,6 +390,26 @@ def pessoas_por_cliente() -> dict[int, list[str]]:
         return lista
 
 
+def _pessoa_no_cliente(con, cliente_id, nome: str):
+    """A pessoa do cliente com este nome (sem diferenciar maiúsculas, inclusive acentuadas); a viva antes da excluída."""
+    chave = _chave_nome(nome)
+    achadas = [r for r in con.execute("SELECT id, uuid, nome, excluido FROM pessoas WHERE cliente_id IS ? "
+                                      "ORDER BY excluido, uuid", (cliente_id,)) if _chave_nome(r["nome"]) == chave]
+    return achadas[0] if achadas else None
+
+
+def _unificar_pessoas(con) -> int:
+    """A mesma pessoa duas vezes no cliente (veio de outro PC com outra caixa, ou dois clientes se uniram):
+    fica a de menor uuid — escolha igual em todos os PCs — e as outras são excluídas."""
+    grupos = {}
+    for r in con.execute("SELECT id, uuid, cliente_id, nome FROM pessoas WHERE excluido = 0 AND cliente_id IS NOT NULL"):
+        grupos.setdefault((r["cliente_id"], _chave_nome(r["nome"])), []).append(r)
+    sobra = [r["id"] for g in grupos.values() if len(g) > 1 for r in sorted(g, key=lambda x: x["uuid"])[1:]]
+    for pid in sobra:
+        con.execute("UPDATE pessoas SET excluido = 1, atualizado_em = ? WHERE id = ?", (agora(), pid))
+    return len(sobra)
+
+
 def adicionar_pessoa(cliente_id, nome) -> bool:
     """Liga a pessoa ao cliente (sem duplicar: mesmo nome, sem diferenciar maiúsculas). True se é nova."""
     nome = " ".join(str(nome or "").split())[:80]
@@ -396,8 +417,7 @@ def adicionar_pessoa(cliente_id, nome) -> bool:
     if not nome or not c:
         return False
     with conexao() as con:
-        existente = con.execute("SELECT id, excluido FROM pessoas WHERE cliente_id = ? AND nome = ? COLLATE NOCASE",
-                                (c["id"], nome)).fetchone()
+        existente = _pessoa_no_cliente(con, c["id"], nome)
         if existente:
             if existente["excluido"]:
                 con.execute("UPDATE pessoas SET excluido = 0, atualizado_em = ? WHERE id = ?", (agora(), existente["id"]))
@@ -562,11 +582,30 @@ def mesclar(remoto: dict) -> int:
     mudou = 0
     with conexao() as con:
         # 1) apelidos (uniões feitas no outro PC)
+        apelidos_remotos = {ap["uuid"]: ap.get("para") for ap in _registros(remoto, "apelidos")}
+        conhecidos = {r["uuid"] for r in con.execute("SELECT uuid FROM clientes")} | {
+            c["uuid"] for c in _registros(remoto, "clientes")}
+
+        def termina_em_cliente(u):
+            vistos = set()
+            while u not in conhecidos and u not in vistos:
+                vistos.add(u)
+                r = con.execute("SELECT para FROM clientes_alias WHERE uuid = ?", (u,)).fetchone()
+                u = r["para"] if r else apelidos_remotos.get(u)
+                if not isinstance(u, str):
+                    return False
+            return u in conhecidos
+
         for ap in _registros(remoto, "apelidos"):
             # a união sempre aponta para o menor uuid; o contrário só viria de arquivo estragado e faria ciclo
             if not isinstance(ap.get("para"), str) or not ap["para"] or ap["para"] >= ap["uuid"]:
                 continue
-            if con.execute("SELECT 1 FROM clientes_alias WHERE uuid = ? AND para = ?", (ap["uuid"], ap["para"])).fetchone():
+            if not termina_em_cliente(ap["para"]):  # apelido para um cliente que não existe em lugar nenhum
+                continue
+            # cada PC pode ter guardado um passo diferente da mesma cadeia: fica o menor (o mais perto do
+            # cliente que ficou), senão os dois trocariam de apelido a cada sincronia
+            atual = con.execute("SELECT para FROM clientes_alias WHERE uuid = ?", (ap["uuid"],)).fetchone()
+            if atual and atual["para"] <= ap["para"]:
                 continue
             _apelidar(con, ap["uuid"], ap["para"])
             mudou += 1
@@ -585,6 +624,13 @@ def mesclar(remoto: dict) -> int:
                             "emails": _limpar_emails(c.get("emails")), "excluido": int(bool(c.get("excluido"))),
                             "atualizado_em": c.get("atualizado_em") or "", "criado_em": c.get("criado_em") or agora()})
         mudou += _mesclar_clientes(con, remotos)
+        # apelido aponta direto para o cliente que ficou (não para um passo do meio da cadeia): assim os
+        # dois PCs guardam o mesmo, e mesclar de novo não muda nada
+        for ap in con.execute("SELECT uuid, para FROM clientes_alias").fetchall():
+            final = _canonico(con, ap["para"])
+            if final != ap["para"]:
+                con.execute("UPDATE clientes_alias SET para = ? WHERE uuid = ?", (final, ap["uuid"]))
+                mudou += 1
 
         def id_local(cliente_uuid):
             if not cliente_uuid:
@@ -631,8 +677,7 @@ def mesclar(remoto: dict) -> int:
             local = con.execute("SELECT atualizado_em FROM pessoas WHERE uuid = ?", (p["uuid"],)).fetchone()
             if not local:
                 # a mesma pessoa criada nos dois PCs (mesmo cliente e nome) fica uma só
-                if con.execute("SELECT 1 FROM pessoas WHERE cliente_id IS ? AND nome = ? COLLATE NOCASE",
-                               (cid, nome)).fetchone():
+                if _pessoa_no_cliente(con, cid, nome):
                     continue
                 con.execute("INSERT INTO pessoas (uuid, cliente_id, nome, criado_em, atualizado_em, excluido) "
                             "VALUES (?, ?, ?, ?, ?, ?)", (p["uuid"], cid, nome, p.get("criado_em") or agora(),
@@ -642,6 +687,8 @@ def mesclar(remoto: dict) -> int:
                 con.execute("UPDATE pessoas SET cliente_id = ?, nome = ?, atualizado_em = ?, excluido = ? WHERE uuid = ?",
                             (cid, nome, p["atualizado_em"], int(bool(p.get("excluido"))), p["uuid"]))
                 mudou += 1
+        # uniões de clientes e versões de outro PC podem ter juntado a mesma pessoa duas vezes no cliente
+        mudou += _unificar_pessoas(con)
     return mudou
 
 
