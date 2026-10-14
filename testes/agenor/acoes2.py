@@ -57,12 +57,19 @@ def f_criar_cliente_emails(m, r):
     pc = m.pc(r)
     nome = r.choice(A1.NOMES)
     em = r.choice(EMAILS_OK)
-    existia = any(c["nome"].lower() == nome.strip().lower() for c in _clientes())
+    antigo = next((c for c in _clientes() if c["nome"].lower() == nome.strip().lower()), None)
+    existia = antigo is not None
     cid = db.criar_cliente(nome, em)
     c = db.cliente(cid)
     cobrar(c is not None and c["nome"].lower() == nome.strip().lower(), "I16-criar_cliente-emails", f"{pc}: nome")
     if not existia:
-        cobrar(c["emails"] == db._limpar_emails(em) if hasattr(db, "_limpar_emails") else True, "I16-criar_cliente-emails", f"{pc}: emails {em!r} -> {c['emails']!r}")
+        cobrar(c["emails"] == db._limpar_emails(em), "I16-criar_cliente-emails", f"{pc}: emails {em!r} -> {c['emails']!r}")
+    else:  # decisao 2026-10-13: nome existente ganha os e-mails novos, sem perder os que tinha
+        esperado = _lista(antigo["emails"]) + [e for e in _lista(db._limpar_emails(em)) if e not in _lista(antigo["emails"])]
+        cobrar(cid == antigo["id"] and _lista(c["emails"]) == esperado, "I16-criar_cliente-existente-emails",
+               f"{pc}: {antigo['emails']!r} + {em!r} -> {c['emails']!r}")
+        cobrar(c["atualizado_em"] > antigo["atualizado_em"] or c["emails"] == antigo["emails"], "I16-criar_cliente-relogio",
+               f"{pc}: e-mails mudaram e atualizado_em nao avancou (sincronia nao leva)")
     return f"{pc} cria {nome!r} emails={em!r} existia={existia}"
 
 
@@ -82,7 +89,8 @@ def f_cliente_por_email(m, r):
         cobrar(got is None, "I17-cliente_por_email-sem-arroba", f"{pc}: {q!r} -> {got}")
         return f"{pc} {q!r}"
     dom = "@" + s.split("@", 1)[1]
-    donos = [c["id"] for c in cl if s in _lista(c["emails"]) or dom in _lista(c["emails"])]
+    # decisao 2026-10-13: quem tem o e-mail exato ganha de quem so tem o dominio
+    donos = [c["id"] for c in cl if s in _lista(c["emails"])] or [c["id"] for c in cl if dom in _lista(c["emails"])]
     cobrar((got in donos) if donos else got is None, "I17-cliente_por_email-errado", f"{pc}: {q!r} -> {got}, donos={donos}")
     return f"{pc} {q!r} -> {got}"
 
@@ -320,6 +328,9 @@ def f_rota_cliente_novo_emails(m, r):
     pc, resp = chamar(m, r, "post", "/clientes/novo", data=dados)
     if nome.strip():
         cobrar(nome.strip().lower() in {c["nome"].lower() for c in _clientes()}, "I19-clientes-novo", f"{pc}: cliente {nome!r} nao foi criado")
+        depois = next(c for c in _clientes() if c["nome"].lower() == nome.strip().lower())
+        cobrar(all(e in _lista(depois["emails"]) for e in _lista(db._limpar_emails(em))), "I19-clientes-novo-emails",
+               f"{pc}: e-mails digitados {em[:40]!r} nao ficaram no cliente ({depois['emails'][:60]!r})")
     else:
         cobrar({c["nome"].lower() for c in _clientes()} == antes, "I19-clientes-novo", f"{pc}: nome vazio criou cliente")
     return f"{pc} /clientes/novo {nome!r} {em[:30]!r}"

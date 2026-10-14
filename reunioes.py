@@ -1551,8 +1551,13 @@ def cliente_novo():
     if not nome:
         flash("Digite o nome do cliente.")
         return redirect(request.referrer or url_for("tarefas"))
+    antes = {c["id"]: c for c in db.clientes()}
     cid = db.criar_cliente(nome, request.form.get("emails", ""))
-    flash(f"Cliente {nome} cadastrado. Ele já aparece para escolher quando você abrir o Meet.")
+    if cid in antes:
+        novos = (db.cliente(cid) or {}).get("emails") != antes[cid].get("emails")
+        flash(f"O cliente {antes[cid]['nome']} já existia" + ("; os e-mails novos foram acrescentados." if novos else "."))
+    else:
+        flash(f"Cliente {nome} cadastrado. Ele já aparece para escolher quando você abrir o Meet.")
     if request.form.get("depois") == "nova_reuniao":  # cadastrado pela tela de nova reunião: volta com ele escolhido
         return redirect(url_for("nova_reuniao", cliente=cid))
     if request.form.get("abrir"):

@@ -5,6 +5,7 @@ não apagada), para que a sincronização pelo Google Drive consiga mesclar o qu
 """
 
 import sqlite3
+import unicodedata
 import uuid as _uuid
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -101,6 +102,10 @@ def criar_tabelas() -> None:
         )
         # uuid de cliente que foi unido a outro -> uuid que ficou (sincronizado entre PCs)
         con.execute("CREATE TABLE IF NOT EXISTS clientes_alias (uuid TEXT PRIMARY KEY, para TEXT NOT NULL)")
+        # clientes que só diferem na caixa de letra acentuada ("Ação"/"AÇÃO") passaram pelo NOCASE: une
+        chaves = [_chave_nome(r["nome"]) for r in con.execute("SELECT nome FROM clientes")]
+        if len(set(chaves)) != len(chaves):
+            _mesclar_clientes(con, [])
 
 
 # ---------------------------------------------------------------- validação
@@ -155,36 +160,50 @@ def _limpar_emails(emails) -> str:
 
 
 def cliente_por_email(email: str) -> int | None:
-    """Cliente cujo e-mail ou domínio (@empresa.com) cadastrado bate com este e-mail."""
+    """Cliente que tem este e-mail cadastrado; senão, o que tem o domínio (@empresa.com).
+    O e-mail exato ganha: a pessoa pode ser de uma empresa e atender o projeto de outro cliente."""
     email = str(email or "").strip().lower()
     if "@" not in email:
         return None
     dominio = "@" + email.split("@", 1)[1]
-    for c in clientes():
-        cadastrados = [e.strip() for e in (c.get("emails") or "").split(",") if e.strip()]
-        if email in cadastrados or dominio in cadastrados:
-            return c["id"]
+    todos = [(c["id"], [e.strip() for e in (c.get("emails") or "").split(",") if e.strip()]) for c in clientes()]
+    for procurado in (email, dominio):
+        for cid, cadastrados in todos:
+            if procurado in cadastrados:
+                return cid
     return None
 
 
 def criar_cliente(nome, emails: str = "") -> int | None:
+    """Cadastra o cliente. Se o nome já existe, é ele mesmo: volta a valer se estava excluído e
+    ganha os e-mails novos (os que já tinha continuam)."""
     nome = str(nome or "").strip()
     if not nome:
         return None
     with conexao() as con:
-        existente = con.execute("SELECT id, excluido FROM clientes WHERE nome = ?", (nome,)).fetchone()
+        existente = _mesmo_nome(con, nome)
         if existente:
-            if existente["excluido"]:
-                con.execute("UPDATE clientes SET excluido = 0, atualizado_em = ? WHERE id = ?", (agora(), existente["id"]))
+            juntos = _limpar_emails(", ".join(x for x in (existente["emails"], _limpar_emails(emails)) if x))
+            if existente["excluido"] or juntos != (existente["emails"] or ""):
+                con.execute("UPDATE clientes SET excluido = 0, emails = ?, atualizado_em = ? WHERE id = ?",
+                            (juntos, agora(), existente["id"]))
             return existente["id"]
         momento = agora()
         return con.execute("INSERT INTO clientes (nome, criado_em, uuid, atualizado_em, emails) VALUES (?, ?, ?, ?, ?)",
                            (nome, momento, _uuid.uuid4().hex, momento, _limpar_emails(emails))).lastrowid
 
 
+def _mesmo_nome(con, nome: str, exceto: int | None = None):
+    """O cliente (excluído ou não) com este nome, sem diferenciar maiúsculas, inclusive acentuadas."""
+    chave = _chave_nome(nome)
+    for r in con.execute("SELECT id, nome, excluido, emails FROM clientes"):
+        if r["id"] != exceto and _chave_nome(r["nome"]) == chave:
+            return r
+    return None
+
+
 def _nome_livre(con, nome: str, cliente_id: int) -> None:
-    outro = con.execute("SELECT id FROM clientes WHERE nome = ? AND id != ?", (nome, cliente_id)).fetchone()
-    if outro:
+    if _mesmo_nome(con, nome, exceto=cliente_id):
         raise ClienteDuplicado(f"Já existe um cliente chamado \"{nome}\".")
 
 
@@ -431,12 +450,10 @@ def _unir_registros(con, a: dict, b: dict) -> None:
     _apelidar(con, sai["uuid"], canonico)
 
 
-_MINUSCULAS_ASCII = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
-
-
 def _chave_nome(nome: str) -> str:
-    """Nomes iguais para o UNIQUE COLLATE NOCASE do SQLite (que só ignora maiúsculas de A a Z)."""
-    return nome.translate(_MINUSCULAS_ASCII)
+    """Nomes que são o mesmo cliente: sem diferenciar maiúsculas, inclusive acentuadas ("Ação" = "AÇÃO").
+    É mais largo que o UNIQUE COLLATE NOCASE do SQLite (só A-Z), então quem é igual para ele também é aqui."""
+    return unicodedata.normalize("NFC", str(nome)).casefold()
 
 
 def _mesclar_clientes(con, remotos: list[dict]) -> int:
