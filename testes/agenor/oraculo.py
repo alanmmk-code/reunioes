@@ -34,6 +34,7 @@ def estado(m):
         tars, clis = linhas("tarefas"), linhas("clientes")
         exc = {t["id"] for t in tars if t["excluido"]}
         ids_cli = {c["id"] for c in clis}
+        cli_exc = {c["id"] for c in clis if c["excluido"]}
         for t in tars:
             cobrar(t["status"] in db.STATUS, "E1-status-invalido", f"{pc}: tarefa {t['id']} com status {t['status']!r}")
             if t["prazo"] is not None:
@@ -49,6 +50,7 @@ def estado(m):
         for args in ({}, {"somente_minhas": True}, {"incluir_feitas": True}, {"incluir_feitas": True, "somente_minhas": True}):
             for t in db.tarefas(**args):
                 cobrar(t["id"] not in exc, "E5-tarefas()-devolve-excluida", f"{pc}: tarefas({args}) devolveu a excluida {t['id']}")
+                cobrar(t["cliente_id"] not in cli_exc, "E28-tarefa-de-cliente-excluido", f"{pc}: tarefas({args}) devolveu {t['id']} do cliente excluido {t['cliente_id']}")
                 if not args.get("incluir_feitas"):
                     cobrar(t["status"] != "feito", "E6-feita-sem-pedir", f"tarefas({args}) devolveu feita")
                 if args.get("somente_minhas"):
@@ -122,7 +124,7 @@ def _estado_clientes(pc, clis):
         itens = [e for e in em.split(", ") if e]
         ok = em == "" or (em == em.lower().strip() and len(set(itens)) == len(itens) and all("@" in e and " " not in e and "," not in e for e in itens))
         cobrar(ok, "E23-emails-fora-do-padrao", f"{pc}: cliente {c['id']} emails={em!r}")
-        for e in itens:
+        for e in (itens if not c["excluido"] else []):  # cliente excluido nao e sugerido pelo e-mail (de proposito)
             got = db.cliente_por_email(e)
             dono = next((x for x in clis if x["id"] == got), None)
             cobrar(got is not None and dono is not None and not dono["excluido"], "E24-cliente_por_email-nao-acha",

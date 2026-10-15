@@ -5,6 +5,6 @@
  ],
  "chave": "E21-apelido-aponta-para-nada:estranho",
  "catalogo": "v3",
- "carimbo": "e0182d65ea8f",
+ "carimbo": "e025681103bd",
  "msg": "export estragado com apelido para um uuid que nao e cliente em nenhum dos PCs: era aceito"
 }

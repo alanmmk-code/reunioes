@@ -10,13 +10,14 @@ import traceback
 import acoes as A
 import acoes2 as A2
 import acoes3 as A3
+import acoes4 as A4
 import ambiente as amb
 import oraculo as o
 
 
 # Catalogos: "v1" = acoes.py CONGELADO (as sementes antigas sao este passeio); "v2" = v1 + acoes2.py.
-CATALOGOS = {"v1": A.ACOES, "v2": A2.ACOES2, "v3": A3.ACOES3}
-ATIVO = {"nome": "v3"}
+CATALOGOS = {"v1": A.ACOES, "v2": A2.ACOES2, "v3": A3.ACOES3, "v4": A4.ACOES4}
+ATIVO = {"nome": "v4"}
 
 
 def escolher(semente, i, catalogo=None):
@@ -102,5 +103,6 @@ def descrever(semente, indices, catalogo=None):
 def carimbo(catalogo=None):
     """Hash do catalogo de geradores: se muda, a semente guardada deixou de ser o mesmo passeio."""
     cat = catalogo or ATIVO["nome"]
-    fonte = inspect.getsource(A) + (inspect.getsource(A2) if cat in ("v2", "v3") else "") + (inspect.getsource(A3) if cat == "v3" else "")
+    fonte = inspect.getsource(A) + (inspect.getsource(A2) if cat in ("v2", "v3", "v4") else "") + (
+        inspect.getsource(A3) if cat in ("v3", "v4") else "") + (inspect.getsource(A4) if cat == "v4" else "")
     return hashlib.sha1(fonte.encode("utf-8")).hexdigest()[:12]

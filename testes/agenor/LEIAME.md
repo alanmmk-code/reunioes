@@ -32,8 +32,8 @@ desfaz, idempotente), H1..H4 (hostis), R1/R2 (rota estoura / 5xx).
 
 ## Catalogos
 `v1` = acoes.py, `v2` = v1 + acoes2.py (clientes/sincronia), `v3` = v2 + acoes3.py (pessoas dos clientes, remarcar,
-envios presos no Outlook, extensao sem gravacao). Cada um CONGELADO quando o seguinte nasce: acao nova vai num catalogo
-novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v3.
+envios presos no Outlook, extensao sem gravacao), `v4` = v3 + acoes4.py (excluir cliente e recadastrar). Cada um CONGELADO quando o seguinte nasce: acao nova vai num catalogo
+novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v4.
 Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
 certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
 S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).

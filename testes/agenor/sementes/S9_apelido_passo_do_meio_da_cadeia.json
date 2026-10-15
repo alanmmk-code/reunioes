@@ -29,6 +29,6 @@
  ],
  "chave": "S9-mesclar-nao-idempotente",
  "catalogo": "v3",
- "carimbo": "e0182d65ea8f",
+ "carimbo": "e025681103bd",
  "msg": "cada PC guardou um passo diferente da mesma cadeia de apelidos (ef14->997b->34e3): trocavam de apelido a cada sincronia"
 }

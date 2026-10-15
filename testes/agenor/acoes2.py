@@ -46,7 +46,7 @@ def f_atualizar_cliente(m, r):
     n = db.cliente(c["id"])
     cobrar(n["nome"] == nome.strip(), "I15-atualizar_cliente-nome", f"{pc}: nome {nome!r} -> {n['nome']!r}")
     cobrar(n["atualizado_em"] > c["atualizado_em"], "I15-atualizar_cliente-relogio", f"{pc}: atualizado_em nao avancou (sincronia nao leva a mudanca)")
-    if em in EMAILS_OK:  # e-mail digitado direito tem de ser achado depois
+    if em in EMAILS_OK and not c["excluido"]:  # e-mail digitado direito tem de ser achado depois (cliente excluido nao e sugerido)
         for e in [x.strip().lower() for x in em.replace(";", ",").replace("\n", ",").split(",") if "@" in x]:
             got = db.cliente_por_email(e)
             cobrar(got is not None, "I15-atualizar_cliente-email-nao-achado", f"{pc}: {e!r} gravado e cliente_por_email -> None")

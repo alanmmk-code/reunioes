@@ -21,22 +21,23 @@ import ambiente as amb  # noqa: E402
 import acoes as A  # noqa: E402
 import acoes2 as A2  # noqa: E402
 import acoes3 as A3  # noqa: E402
+import acoes4 as A4  # noqa: E402
 import nucleo as N  # noqa: E402
 
 
 def cobertura():
     rotas = sorted({str(r.rule) for r in amb.reunioes.app.url_map.iter_rules() if r.endpoint != "static"})
-    cobertas = {c for a in A3.ACOES3 for c in a.cobre}
+    cobertas = {c for a in A4.ACOES4 for c in a.cobre}
     if "*" in cobertas:  # o fuzz generico sorteia qualquer rota do url_map, menos as de SEM_FUZZ
         cobertas |= {r for r in [str(x.rule) for x in amb.reunioes.app.url_map.iter_rules()] if not r.startswith(A.SEM_FUZZ)}
     funcs = sorted(n for n in dir(amb.db) if not n.startswith("_") and callable(getattr(amb.db, n))
                    and getattr(getattr(amb.db, n), "__module__", "") == "db" and n not in ("conexao", "agora", "criar_tabelas", "copia_de_seguranca"))
-    print(f"catalogo v3: {len(A3.ACOES3)} acoes ({sum(a.hostil for a in A3.ACOES3)} hostis, {sum(not a.hostil for a in A3.ACOES3)} legitimas)")
+    print(f"catalogo v4: {len(A4.ACOES4)} acoes ({sum(a.hostil for a in A4.ACOES4)} hostis, {sum(not a.hostil for a in A4.ACOES4)} legitimas)")
     sem_rota = [r for r in rotas if r not in cobertas]
     print("rotas sem acao:", sem_rota or "nenhuma")
     print("funcoes de db sem acao:", [f for f in funcs if "db." + f not in cobertas] or "nenhuma")
     print("fora do alcance (por que):")
-    for k, v in A3.SEM_ACAO.items():
+    for k, v in A4.SEM_ACAO.items():
         print(f"  {k}: {v}")
     ref = AQUI / "cobertura.json"
     atual = {"rotas": rotas, "funcoes": funcs}
@@ -73,7 +74,7 @@ def main():
     ap.add_argument("--sementes", type=int, default=10)
     ap.add_argument("--semente")
     ap.add_argument("--base", type=int, default=1000, help="primeira semente numerica")
-    ap.add_argument("--catalogo", default="v3", choices=["v1", "v2", "v3"])
+    ap.add_argument("--catalogo", default="v4", choices=["v1", "v2", "v3", "v4"])
     ap.add_argument("--falar", action="store_true")
     ap.add_argument("--reduzir", action="store_true")
     ap.add_argument("--so", default="", help="so reduz/mostra chaves que contenham este texto")

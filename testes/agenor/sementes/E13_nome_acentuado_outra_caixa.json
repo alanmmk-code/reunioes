@@ -6,6 +6,6 @@
  ],
  "chave": "E13-cliente-nome-repetido:nao-ascii:estranho",
  "catalogo": "v2",
- "carimbo": "3297324455e7",
+ "carimbo": "f38f46c4d127",
  "msg": "A cadastra 'ção'; chega de outro PC 'ÇÃO' (mesmo cliente, outra caixa acentuada): o NOCASE do SQLite so cobre A-Z e ficavam dois clientes"
 }
