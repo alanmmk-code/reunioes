@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -19,15 +20,22 @@ import config
 _locais = threading.local()  # um conjunto de serviços por thread
 
 
-def _credentials() -> Credentials:
+def _credentials(entrar_de_novo: bool = False) -> Credentials:
+    """Credenciais salvas (renovadas se venceram). Com entrar_de_novo (comando login), autorização vencida
+    ou revogada abre o login no navegador em vez de dar erro."""
     creds = None
     if config.TOKEN_FILE.exists():
         creds = Credentials.from_authorized_user_file(str(config.TOKEN_FILE), config.GOOGLE_SCOPES)
     if creds and creds.valid:
         return creds
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
+        try:
+            creds.refresh(Request())
+        except RefreshError:
+            if not entrar_de_novo:
+                raise
+            creds = None
+    if not (creds and creds.valid):
         if not config.CREDENTIALS_FILE.exists():
             raise RuntimeError(
                 "Arquivo credentials.json não encontrado. Veja o passo 'Google Cloud' no README.md."
@@ -56,7 +64,7 @@ def _svc(name: str, version: str):
 
 def autenticar() -> str:
     """Força o login e devolve o e-mail da conta conectada."""
-    _credentials()
+    _credentials(entrar_de_novo=True)
     # events.list é coberto pelo escopo calendar.events; o "summary" da agenda principal é o e-mail
     info = _svc("calendar", "v3").events().list(calendarId="primary", maxResults=1).execute()
     return info.get("summary", "")
