@@ -1140,6 +1140,9 @@ def manual(event_id):
                    "descricao": "", "participantes": []}
     else:
         reuniao = g.obter_reuniao(event_id)
+        if not reuniao:
+            flash("Reunião não encontrada no Google Agenda.")
+            return redirect(url_for("inicio"))
     if request.method == "POST":
         texto = request.form.get("texto", "").strip()
         arquivo = request.files.get("arquivo")
@@ -1628,6 +1631,8 @@ def cliente_novo():
     if cid in antes:
         novos = (db.cliente(cid) or {}).get("emails") != antes[cid].get("emails")
         flash(f"O cliente {antes[cid]['nome']} já existia" + ("; os e-mails novos foram acrescentados." if novos else "."))
+    elif cid and (db.tarefas(cliente_id=cid, incluir_feitas=True) or db.notas(cid)):
+        flash(f"O cliente {db.cliente(cid)['nome']} tinha sido excluído e voltou, com as tarefas e anotações dele.")
     else:
         flash(f"Cliente {nome} cadastrado. Ele já aparece para escolher quando você abrir o Meet.")
     if request.form.get("depois") == "nova_reuniao":  # cadastrado pela tela de nova reunião: volta com ele escolhido
@@ -1646,6 +1651,16 @@ def cliente_editar(cliente_id):
         except db.ClienteDuplicado as e:
             flash(str(e))
     return redirect(url_for("ficha_cliente", cliente_id=cliente_id))
+
+
+@app.post("/clientes/<int:cliente_id>/excluir")
+def cliente_excluir(cliente_id):
+    c = db.cliente(cliente_id)
+    if c and db.excluir_cliente(cliente_id):
+        sincronia.agendar()
+        flash(f"Cliente {c['nome']} excluído, com as tarefas e anotações dele. Para trazer tudo de volta, "
+              f"cadastre de novo um cliente chamado {c['nome']}.")
+    return redirect(url_for("lista_clientes"))
 
 
 @app.post("/clientes/<int:cliente_id>")

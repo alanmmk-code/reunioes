@@ -220,6 +220,17 @@ def _mesmo_nome(con, nome: str, exceto: int | None = None):
     return None
 
 
+def excluir_cliente(cliente_id) -> bool:
+    """Tira o cliente das telas (nos dois PCs, pela sincronia). Tarefas, anotações e pessoas ficam ligadas a
+    ele e somem junto; cadastrar o mesmo nome de novo traz tudo de volta. As atas não são tocadas."""
+    cliente_id = _id(cliente_id)
+    if not cliente_id:
+        return False
+    with conexao() as con:
+        return con.execute("UPDATE clientes SET excluido = 1, atualizado_em = ? WHERE id = ? AND excluido = 0",
+                           (agora(), cliente_id)).rowcount == 1
+
+
 def _nome_livre(con, nome: str, cliente_id: int) -> None:
     if _mesmo_nome(con, nome, exceto=cliente_id):
         raise ClienteDuplicado(f"Já existe um cliente chamado \"{nome}\".")
@@ -262,7 +273,7 @@ def _descricao(descricao) -> str:
 
 def _cliente_existente(con, cliente_id) -> int | None:
     cliente_id = _id(cliente_id)
-    if cliente_id and con.execute("SELECT 1 FROM clientes WHERE id = ?", (cliente_id,)).fetchone():
+    if cliente_id and con.execute("SELECT 1 FROM clientes WHERE id = ? AND excluido = 0", (cliente_id,)).fetchone():
         return cliente_id
     return None
 
@@ -334,8 +345,9 @@ def excluir_tarefa(tarefa_id) -> None:
 
 
 def tarefas(somente_minhas=False, incluir_feitas=False, cliente_id=None) -> list[dict]:
+    # tarefa de cliente excluído some junto com ele (e volta se o cliente for cadastrado de novo)
     sql = ("SELECT t.*, c.nome AS cliente FROM tarefas t LEFT JOIN clientes c ON c.id = t.cliente_id "
-           "WHERE t.excluido = 0")
+           "WHERE t.excluido = 0 AND (c.id IS NULL OR c.excluido = 0)")
     args = []
     if somente_minhas:
         sql += " AND t.minha = 1"

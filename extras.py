@@ -38,7 +38,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
     @app.route("/cliente/<int:cliente_id>")
     def ficha_cliente(cliente_id):
         c = db.cliente(cliente_id)
-        if not c:
+        if not c or c["excluido"]:
             flash("Cliente não encontrado.")
             return redirect(url_for("lista_clientes"))
         reunioes_cli = clientes.atas_do_cliente(cliente_id)

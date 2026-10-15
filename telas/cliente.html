@@ -10,7 +10,10 @@
 <form method="post" action="{{ url_for('cliente_editar', cliente_id=c.id) }}" class="card" style="display:grid;gap:10px;margin-top:8px">
 <label class="mut">Nome <input name="nome" value="{{ c.nome }}" required></label>
 <label class="mut">E-mails ou domínio <input name="emails" value="{{ c.emails or '' }}" placeholder="joao@ivone.com, @ivone.com"></label>
-<div><button>Salvar</button></div></form></details>
+<div><button>Salvar</button></div></form>
+<form method="post" action="{{ url_for('cliente_excluir', cliente_id=c.id) }}" style="margin-top:8px"
+ onsubmit='return confirm({{ ("Excluir " ~ c.nome ~ "? As tarefas e anotações dele somem junto. Para trazer tudo de volta, basta cadastrar de novo um cliente com este nome.")|tojson }})'>
+<button class="sec">Excluir cliente</button></form></details>
 {% if c.motivos %}<ul class="motivos linha-motivos">{% for nivel, txt in c.motivos %}<li class="m-{{ nivel }}">{{ txt }}</li>{% endfor %}</ul>{% endif %}
 
 <form method="post" action="{{ url_for('perguntar') }}" class="pergunta" data-espera="Consultando as atas…">
