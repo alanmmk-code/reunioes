@@ -7,6 +7,7 @@ Uso:
 """
 
 import json
+import os
 import re
 from urllib.parse import quote, urlencode
 from html import escape
@@ -739,6 +740,9 @@ details>summary{cursor:pointer;list-style:none}
 <button class="sec">Sincronizar</button></form>{% endif %}
 </div></header>
 <main>
+{% if desatualizado %}<form method="post" action="{{ url_for('reiniciar') }}" class="flash" style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+<span>Há uma versão nova do painel instalada (depois de um <code>git pull</code>). Reinicie para ela valer.</span>
+<button>Reiniciar agora</button></form>{% endif %}
 {% for m in get_flashed_messages() %}<div class="flash">{{ m }}</div>{% endfor %}
 {{ corpo|safe }}
 </main>
@@ -750,7 +754,61 @@ const b=f.querySelector('button');b.disabled=true;b.textContent=f.dataset.espera
 def pagina(corpo_tpl: str, **ctx):
     corpo = render_template_string(corpo_tpl, **ctx)
     css = (config.BASE_DIR / "telas" / "comum.css").read_text(encoding="utf-8")
-    return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR, css_comum=css)
+    return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR, css_comum=css,
+                                  desatualizado=codigo_mudou())
+
+
+# ---------------------------------------------------------------- painel desatualizado (código novo em disco)
+
+def _versao_do_codigo() -> tuple:
+    """Impressão digital do código em disco: muda quando um git pull (ou edição) troca algum arquivo."""
+    arquivos = sorted(config.BASE_DIR.glob("*.py")) + sorted((config.BASE_DIR / "telas").glob("*"))
+    return tuple((a.name, a.stat().st_mtime_ns, a.stat().st_size) for a in arquivos if a.is_file())
+
+
+VERSAO_INICIAL = _versao_do_codigo()
+_versao_vista = {"em": 0.0, "mudou": False}
+
+
+def codigo_mudou() -> bool:
+    agora = time.time()
+    if agora - _versao_vista["em"] >= 30:  # não precisa olhar o disco a cada página
+        _versao_vista.update(em=agora, mudou=_versao_do_codigo() != VERSAO_INICIAL)
+    return _versao_vista["mudou"]
+
+
+def _ocupado() -> str | None:
+    if GRAVADOR.ativo:
+        return "há uma gravação em andamento"
+    if TAREFA["ativa"]:
+        return "uma ata está sendo gerada"
+    return None
+
+
+def _encerrar_processo() -> None:
+    os._exit(0)
+
+
+@app.post("/reiniciar")
+def reiniciar():
+    """Sobe um painel novo (que espera a porta liberar) e encerra este, para valer o código atualizado."""
+    motivo = _ocupado()
+    if motivo:
+        flash(f"Não reiniciei agora porque {motivo}. Tente de novo quando terminar.")
+        return redirect(request.referrer or url_for("inicio"))
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "web", "--reiniciado"], cwd=str(config.BASE_DIR),
+                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                     close_fds=True)
+    threading.Timer(0.5, _encerrar_processo).start()  # dá tempo de a página de espera chegar ao navegador
+    return """<!doctype html><meta charset="utf-8"><title>Reiniciando…</title>
+<body style="font-family:system-ui;padding:40px;color:#333">Reiniciando o painel com a versão nova…
+<script>setTimeout(function t(){fetch('/api/versao').then(r=>r.ok?location.replace('/'):setTimeout(t,1000))
+.catch(()=>setTimeout(t,1000))},2000)</script></body>"""
+
+
+@app.get("/api/versao")
+def api_versao():
+    return {"desatualizado": codigo_mudou()}
 
 
 @app.post("/sincronizar")
@@ -1598,8 +1656,13 @@ if __name__ == "__main__":
         modo_auto()
     else:
         url = f"http://localhost:{config.PORTA}"
-        with socket.socket() as s:
-            ja_rodando = s.connect_ex(("127.0.0.1", config.PORTA)) == 0
+        reiniciado = "--reiniciado" in sys.argv
+        for _ in range(40 if reiniciado else 1):  # reiniciado: o painel antigo ainda está saindo
+            with socket.socket() as s:
+                ja_rodando = s.connect_ex(("127.0.0.1", config.PORTA)) == 0
+            if not ja_rodando:
+                break
+            time.sleep(0.5)
         if ja_rodando:
             webbrowser.open(url)
             sys.exit(0)
@@ -1624,5 +1687,6 @@ if __name__ == "__main__":
         threading.Thread(target=lambda: [gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO),
                                          gravador.carregar_modelo(config.WHISPER_MODELO_AO_VIVO_OUTROS),
                                          gravador.carregar_modelo()], daemon=True).start()
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        if not reiniciado:  # reiniciado: a aba que pediu já recarrega sozinha
+            threading.Timer(1.0, lambda: webbrowser.open(url)).start()
         app.run(port=config.PORTA, debug=False)

@@ -212,6 +212,7 @@ sincronia.sincronizar = _sinc_falsa
 reunioes.sincronia = sincronia
 reunioes.processar_gravacao = lambda *a, **k: None
 reunioes.processar_texto = lambda *a, **k: None
+reunioes._encerrar_processo = lambda: None  # /reiniciar nunca derruba o teste (e o Popen ja e bloqueado)
 reunioes.app.testing = True
 reunioes.app.config["PROPAGATE_EXCEPTIONS"] = True
 
