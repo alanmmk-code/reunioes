@@ -40,6 +40,35 @@ import sincronia
 app = Flask(__name__)
 app.secret_key = "reunioes-local"
 
+_HOSTS_DO_PAINEL = {"localhost", "127.0.0.1"}
+
+
+@app.before_request
+def so_o_proprio_painel():
+    """O painel só atende quem é dele. Qualquer site aberto no navegador consegue mandar um POST para
+    localhost (excluir cliente, enviar e-mail pelo Outlook, reiniciar...): pedido que altera algo só vale
+    vindo das páginas do painel, da extensão do Chrome ou de programas locais (janelinha, sem Origin).
+    E um site cujo endereço aponte para 127.0.0.1 (DNS rebinding) não consegue nem ler as páginas."""
+    host = (request.host or "").rsplit(":", 1)[0] if not (request.host or "").startswith("[") else ""
+    if host not in _HOSTS_DO_PAINEL:
+        return "Endereço não reconhecido pelo painel.", 403
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    origem = request.headers.get("Origin")
+    if origem is None:  # navegadores sempre mandam Origin num POST; sem ele, é um programa deste PC
+        return None
+    if origem.startswith("chrome-extension://"):
+        return None
+    try:
+        from urllib.parse import urlsplit
+        o = urlsplit(origem)
+        if o.scheme == "http" and o.hostname in _HOSTS_DO_PAINEL and (o.port or 80) == config.PORTA:
+            return None
+    except ValueError:
+        pass
+    print(f"[seguranca] recusado {request.method} {request.path} vindo de {origem[:80]}")
+    return "Pedido recusado: não veio do painel.", 403
+
 
 def seletor_remetente(nome: str = "remetente") -> str:
     """<select> com as contas do Outlook, para escolher de qual e-mail enviar."""
