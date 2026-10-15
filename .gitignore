@@ -7,6 +7,7 @@ __pycache__/
 reunioes.log
 gravacoes/
 dados.db
+copias/
 .claude_code/
 lembretes.json
 janela.log

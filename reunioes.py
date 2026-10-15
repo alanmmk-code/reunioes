@@ -785,6 +785,20 @@ def _ocupado() -> str | None:
     return None
 
 
+def copias_de_seguranca() -> None:
+    """Cópia do banco ao abrir (se ainda não houver a do dia) e, com o painel aberto, a cada virada de dia."""
+    def loop():
+        while True:
+            try:
+                feita = db.copia_de_seguranca()
+                if feita:
+                    print(f"[copia] {feita.name}")
+            except Exception:
+                traceback.print_exc()
+            time.sleep(3600)
+    threading.Thread(target=loop, daemon=True, name="copias").start()
+
+
 def _encerrar_processo() -> None:
     os._exit(0)
 
@@ -1676,6 +1690,7 @@ if __name__ == "__main__":
             vigiar_extensao()
             print("[monitor] vigiando chamadas do Meet")
         vigiar_janela()
+        copias_de_seguranca()
         sincronia.iniciar_automatico()
         envio.contas()  # já busca as contas do Outlook em segundo plano
         # deixa pronto o status do sistema (verifica Google e Claude em segundo plano)

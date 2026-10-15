@@ -7,7 +7,7 @@ não apagada), para que a sincronização pelo Google Drive consiga mesclar o qu
 import sqlite3
 import unicodedata
 import uuid as _uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import date, datetime, timezone
 
 import config
@@ -107,6 +107,23 @@ def criar_tabelas() -> None:
         if len(set(chaves)) != len(chaves):
             _mesclar_clientes(con, [])
         _unificar_pessoas(con)
+
+
+def copia_de_seguranca(manter: int = 14):
+    """Uma cópia do banco por dia em copias/ (as últimas `manter`). Protege contra uma sincronia ruim,
+    que chegaria também ao Drive. Usa a cópia do próprio SQLite: vale mesmo com o painel gravando."""
+    pasta = ARQUIVO.parent / "copias"
+    destino = pasta / f"dados-{date.today().isoformat()}.db"
+    if destino.exists() or not ARQUIVO.exists():
+        return None
+    pasta.mkdir(exist_ok=True)
+    provisorio = destino.with_suffix(".tmp")
+    with closing(sqlite3.connect(ARQUIVO)) as origem, closing(sqlite3.connect(provisorio)) as copia:
+        origem.backup(copia)
+    provisorio.replace(destino)  # só aparece como cópia do dia depois de completa
+    for velha in sorted(pasta.glob("dados-*.db"))[:-manter]:
+        velha.unlink(missing_ok=True)
+    return destino
 
 
 # ---------------------------------------------------------------- validação

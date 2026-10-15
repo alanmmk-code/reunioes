@@ -30,7 +30,7 @@ def cobertura():
     if "*" in cobertas:  # o fuzz generico sorteia qualquer rota do url_map, menos as de SEM_FUZZ
         cobertas |= {r for r in [str(x.rule) for x in amb.reunioes.app.url_map.iter_rules()] if not r.startswith(A.SEM_FUZZ)}
     funcs = sorted(n for n in dir(amb.db) if not n.startswith("_") and callable(getattr(amb.db, n))
-                   and getattr(getattr(amb.db, n), "__module__", "") == "db" and n not in ("conexao", "agora", "criar_tabelas"))
+                   and getattr(getattr(amb.db, n), "__module__", "") == "db" and n not in ("conexao", "agora", "criar_tabelas", "copia_de_seguranca"))
     print(f"catalogo v3: {len(A3.ACOES3)} acoes ({sum(a.hostil for a in A3.ACOES3)} hostis, {sum(not a.hostil for a in A3.ACOES3)} legitimas)")
     sem_rota = [r for r in rotas if r not in cobertas]
     print("rotas sem acao:", sem_rota or "nenhuma")
