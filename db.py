@@ -7,6 +7,7 @@ não apagada), para que a sincronização pelo Google Drive consiga mesclar o qu
 import sqlite3
 import unicodedata
 import uuid as _uuid
+from collections import Counter
 from contextlib import closing, contextmanager
 from datetime import date, datetime, timezone
 
@@ -297,6 +298,25 @@ def importar_acoes_da_ata(reuniao: dict, ata, cliente_id) -> int:
     for a in ata.acoes:
         criar_tarefa(cliente_id, a.tarefa, a.responsavel, a.do_usuario, a.prazo, reuniao["id"], ata.titulo)
     return len(ata.acoes)
+
+
+def atualizar_acoes_da_ata(reuniao: dict, acoes_antigas, ata, cliente_id) -> tuple[int, int]:
+    """Ata editada: ação que saiu (ou mudou) tira a tarefa dela, se ainda não feita; ação nova vira tarefa.
+    Tarefas das ações que não mudaram ficam como estão (status e edições feitas na tela de Tarefas)."""
+    def chave(a):
+        return (_descricao(a.tarefa), str(a.responsavel or "").strip(), str(a.prazo or "").strip(), bool(a.do_usuario))
+
+    antes, depois = Counter(map(chave, acoes_antigas)), Counter(map(chave, ata.acoes))
+    saiu, entrou = antes - depois, depois - antes
+    with conexao() as con:
+        for (descricao, *_), n in saiu.items():
+            con.execute("UPDATE tarefas SET excluido = 1, atualizado_em = ? WHERE id IN (SELECT id FROM tarefas "
+                        "WHERE origem_ata = ? AND descricao = ? AND status != 'feito' AND excluido = 0 LIMIT ?)",
+                        (agora(), reuniao["id"], descricao, n))
+    for (descricao, responsavel, prazo, minha), n in entrou.items():
+        for _ in range(n):
+            criar_tarefa(cliente_id, descricao, responsavel, minha, prazo, reuniao["id"], ata.titulo)
+    return sum(saiu.values()), sum(entrou.values())
 
 
 def mover_tarefas_da_ata(event_id: str, cliente_id) -> None:

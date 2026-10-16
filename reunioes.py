@@ -1211,7 +1211,7 @@ def ver_ata(event_id):
         """<h1>{{ a.titulo }}</h1>
 <p class="mut">{{ r.inicio[:16].replace('T',' ') }} · transcrição: {{ reg.origem_transcricao }}</p>
 <form method="post" action="{{ url_for('ata_cliente', event_id=event_id) }}" class="row" style="justify-content:flex-start"><span>Cliente:</span> {{ seletor_cliente(reg.cliente_id)|safe }} <button class="sec">Salvar</button>{% if not reg.cliente_id %}<span class="mut">defina o cliente para as tarefas aparecerem no lugar certo</span>{% endif %}</form>
-<p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a> <a class="btn sec" href="{{ url_for('tarefas', ver='todas') }}">Ver tarefas</a>
+<p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a> <a class="btn sec" href="{{ url_for('ata_editar', event_id=event_id) }}">Editar ata</a> <a class="btn sec" href="{{ url_for('tarefas', ver='todas') }}">Ver tarefas</a>
 <a class="btn sec" href="{{ url_for('ata_excluir', event_id=event_id) }}" style="color:var(--err)">Excluir ata</a></p>
 <div class="card"><h2 style="margin-top:0">Resumo</h2><p>{{ a.resumo }}</p>
 <p class="mut">Participantes: {{ a.participantes|join(', ') }}</p></div>
@@ -1239,6 +1239,93 @@ def ver_ata(event_id):
 <p>{{ seletor_remetente()|safe }}</p>
 <button>Criar evento com Meet</button></form>""",
         a=a, r=r, reg=reg, prox=prox, event_id=event_id, seletor_cliente=seletor_cliente,
+    )
+
+
+def _linhas(campo: str) -> list[str]:
+    return [l.strip() for l in request.form.get(campo, "").splitlines() if l.strip()]
+
+
+def ata_do_formulario(antiga: dict) -> "analisador.Ata":
+    f = request.form
+    topicos = [analisador.Topico(titulo=t.strip(), discussao=d.strip())
+               for t, d in zip(f.getlist("topico_titulo"), f.getlist("topico_texto")) if t.strip() or d.strip()]
+    acoes = [analisador.Acao(tarefa=t.strip(), responsavel=r.strip() or "A definir", prazo=p.strip() or "A definir",
+                             do_usuario=m == "1")
+             for t, r, p, m in zip(f.getlist("acao_tarefa"), f.getlist("acao_resp"), f.getlist("acao_prazo"),
+                                   f.getlist("acao_minha")) if t.strip()]
+    prox = antiga.get("proxima_reuniao") or {}
+    return analisador.Ata(
+        titulo=f.get("titulo", "").strip() or antiga["titulo"],
+        resumo=f.get("resumo", "").strip(),
+        participantes=_linhas("participantes"),
+        topicos=topicos,
+        decisoes=_linhas("decisoes"),
+        acoes=acoes,
+        pontos_de_atencao=_linhas("pontos"),
+        proxima_reuniao=analisador.ProximaReuniao(
+            combinada=f.get("prox_combinada") == "1", data_hora=f.get("prox_data", "").strip(),
+            duracao_min=int(prox.get("duracao_min") or 0), pauta=_linhas("prox_pauta")),
+    )
+
+
+@app.route("/ata/<event_id>/editar", methods=["GET", "POST"])
+def ata_editar(event_id):
+    reg = atas.carregar(event_id)
+    if not reg:
+        flash("Essa ata já não existe.")
+        return redirect(url_for("inicio"))
+    if request.method == "POST":
+        antiga = analisador.Ata.model_validate(reg["ata"])
+        ata = ata_do_formulario(reg["ata"])
+        reg["ata"] = ata.model_dump()
+        atas.salvar(event_id, reg)  # salva antes do Google: a edição não se perde se o Drive falhar
+        saiu, entrou = db.atualizar_acoes_da_ata(reg["reuniao"], antiga.acoes, ata, reg.get("cliente_id"))
+        msg = "Ata salva."
+        if saiu or entrou:
+            msg += f" Tarefas: {entrou} nova(s), {saiu} retirada(s)."
+        try:
+            data = reg["reuniao"].get("inicio", "")[:10]
+            reg["doc_link"] = g.atualizar_google_doc(reg.get("doc_link", ""), f"Ata - {ata.titulo} - {data}",
+                                                     atas.para_html(ata, reg["reuniao"]))
+            atas.salvar(event_id, reg)
+            msg += " Google Doc atualizado."
+        except Exception as e:
+            msg += f" Não consegui atualizar o Google Doc ({e}); tente salvar de novo."
+        flash(msg)
+        return redirect(url_for("ver_ata", event_id=event_id))
+    a = reg["ata"]
+    return pagina(
+        """<h1>Editar ata</h1>
+<p class="mut">Ao salvar, o Google Doc da ata é refeito com este conteúdo (o link continua o mesmo).
+Alterações feitas direto no Google Docs são substituídas. Ações novas viram tarefas; ações apagadas saem das tarefas (as já feitas ficam).</p>
+<form method="post" data-espera="Salvando…">
+<div class="card"><p><b>Título</b><br><input name="titulo" value="{{ a.titulo }}" required></p>
+<p><b>Participantes</b> <span class="mut">(um por linha)</span><br><textarea name="participantes" rows="4">{{ a.participantes|join('\\n') }}</textarea></p>
+<p><b>Resumo</b><br><textarea name="resumo" rows="6">{{ a.resumo }}</textarea></p></div>
+<div class="card"><h2 style="margin-top:0">Assuntos</h2><p class="mut">Deixe título e texto vazios para apagar um assunto.</p>
+{% for t in a.topicos + [{'titulo': '', 'discussao': ''}] * 2 %}
+<p><input name="topico_titulo" value="{{ t.titulo }}" placeholder="Título do assunto"><br>
+<textarea name="topico_texto" rows="4" placeholder="O que foi discutido">{{ t.discussao }}</textarea></p>{% endfor %}</div>
+<div class="card"><h2 style="margin-top:0">Decisões</h2><p class="mut">Uma por linha.</p>
+<textarea name="decisoes" rows="6">{{ a.decisoes|join('\\n') }}</textarea></div>
+<div class="card"><h2 style="margin-top:0">Ações</h2><p class="mut">Apague o texto da tarefa para tirar a ação.</p>
+<table><tr><th>Tarefa</th><th>Responsável</th><th>Prazo</th><th>De quem</th></tr>
+{% for x in a.acoes + [{'tarefa': '', 'responsavel': '', 'prazo': '', 'do_usuario': True}] * 3 %}
+<tr><td><textarea name="acao_tarefa" rows="2">{{ x.tarefa }}</textarea></td>
+<td><input name="acao_resp" value="{{ x.responsavel }}"></td>
+<td><input name="acao_prazo" value="{{ x.prazo }}" placeholder="AAAA-MM-DD"></td>
+<td><select name="acao_minha"><option value="1"{% if x.do_usuario %} selected{% endif %}>Minha / equipe</option>
+<option value="0"{% if not x.do_usuario %} selected{% endif %}>Cliente / terceiros</option></select></td></tr>{% endfor %}</table></div>
+<div class="card"><h2 style="margin-top:0">Pontos de atenção</h2><p class="mut">Um por linha.</p>
+<textarea name="pontos" rows="5">{{ a.pontos_de_atencao|join('\\n') }}</textarea></div>
+<div class="card"><h2 style="margin-top:0">Próxima reunião</h2>
+<p><label><input type="checkbox" style="width:auto" name="prox_combinada" value="1"{% if a.proxima_reuniao.combinada %} checked{% endif %}> Foi combinada</label></p>
+<p><input type="datetime-local" name="prox_data" value="{{ a.proxima_reuniao.data_hora }}"></p>
+<p><b>Pauta</b> <span class="mut">(um item por linha)</span><br><textarea name="prox_pauta" rows="4">{{ a.proxima_reuniao.pauta|join('\\n') }}</textarea></p></div>
+<p><button>Salvar e atualizar o Google Doc</button> <a class="btn sec" href="{{ url_for('ver_ata', event_id=event_id) }}">Cancelar</a></p>
+</form>""",
+        a=a, event_id=event_id,
     )
 
 

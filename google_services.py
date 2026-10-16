@@ -297,6 +297,20 @@ def criar_google_doc(titulo: str, html: str) -> str:
     return arquivo["webViewLink"]
 
 
+def atualizar_google_doc(link: str, titulo: str, html: str) -> str:
+    """Troca o conteúdo (e o nome) do Google Doc pelo HTML, mantendo o mesmo link. Sem doc válido, cria um."""
+    file_id = id_do_link(link)
+    if not file_id:
+        return criar_google_doc(titulo, html)
+    media = MediaInMemoryUpload(html.encode("utf-8"), mimetype="text/html", resumable=False)
+    return (
+        _svc("drive", "v3")
+        .files()
+        .update(fileId=file_id, body={"name": titulo}, media_body=media, fields="webViewLink")
+        .execute()["webViewLink"]
+    )
+
+
 PASTA_MIME = "application/vnd.google-apps.folder"
 
 
