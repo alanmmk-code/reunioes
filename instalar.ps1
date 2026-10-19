@@ -22,6 +22,8 @@ Passo "Instalando as bibliotecas (pode levar alguns minutos)"
 if (-not (Test-Path ".venv")) { py -3.12 -m venv .venv }
 .\.venv\Scripts\python.exe -m pip install -q --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -q -r requirements.txt
+# antes de cada push, o Agenor confere que nenhum defeito ja consertado voltou (.githooks/pre-push)
+if (Test-Path ".git") { git config core.hooksPath .githooks }
 
 # 3. Configurações
 Passo "Configurações (.env)"

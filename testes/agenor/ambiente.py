@@ -111,9 +111,9 @@ subprocess.check_output = _bloqueio_proc
 ia.gerar = lambda *a, **k: (FALTANDO.add("ia.gerar"), (_ for _ in ()).throw(RedeBloqueada("ia.gerar bloqueado")))[1]
 
 
-# tudo o que e publico em google_services vira bloqueio; so as funcoes de leitura da agenda ganham um falso
+# tudo o que e publico em google_services vira bloqueio (menos as funcoes puras, sem rede); a agenda ganha um falso
 for _n in dir(g):
-    if not _n.startswith("_") and _n not in ("id_do_link",) and callable(getattr(g, _n)) and getattr(getattr(g, _n), "__module__", "") == g.__name__:
+    if not _n.startswith("_") and _n not in ("id_do_link", "anotar_conexao", "autorizacao_vencida") and callable(getattr(g, _n)) and getattr(getattr(g, _n), "__module__", "") == g.__name__:
         setattr(g, _n, _bloqueio(_n))
 
 CLOCK = {"n": 0}
@@ -178,9 +178,22 @@ def _remarcar_evento(event_id, inicio, duracao_min, titulo=None, avisar=True):
     return {"link_evento": "https://x", "link_meet": "https://y"}
 
 
+CANCELADOS = []  # (event_id, avisar) de cada cancelar_evento
+
+
+def _cancelar_evento(event_id, avisar=True):
+    if not any(e["id"] == event_id for e in EVENTOS):
+        raise RuntimeError("evento nao existe")  # o Google responderia 404/410
+    CANCELADOS.append((event_id, avisar))  # so registra: a agenda falsa fica igual (testes antigos contam com ev1..ev5)
+
+
 g.obter_evento = _obter_evento
+g.cancelar_evento = _cancelar_evento
 g.remarcar_evento = _remarcar_evento
 g.criar_google_doc = lambda titulo, html: "https://docs.google.com/document/d/" + "A" * 25 + "/edit"
+DOCS_ATUALIZADOS = []  # (link, titulo) de cada atualizar_google_doc
+g.atualizar_google_doc = lambda link, titulo, html: (DOCS_ATUALIZADOS.append((link, titulo)),
+                                                     link if g.id_do_link(link) else g.criar_google_doc(titulo, html))[1]
 LIXEIRA = []
 g.drive_lixeira = lambda fid: LIXEIRA.append(fid)
 g.buscar_transcricao = lambda r: ("texto da transcricao", "falso")
@@ -209,6 +222,17 @@ def _sinc_falsa():
 
 
 sincronia.sincronizar = _sinc_falsa
+LOGINS = []  # cada "Reconectar Google" (o login de verdade abriria o navegador)
+
+
+def _reconectar(espera_s=300):
+    LOGINS.append(espera_s)
+    return "teste@exemplo.com"
+
+
+g.reconectar = _reconectar
+sincronia.enviar_copias = lambda *a, **k: 0
+sincronia.PC = "PC-TESTE"  # o nome de verdade do PC nao entra em semente (o repositorio e publico)
 reunioes.sincronia = sincronia
 reunioes.processar_gravacao = lambda *a, **k: None
 reunioes.processar_texto = lambda *a, **k: None
@@ -247,7 +271,13 @@ def novo_mundo(semente):
     EMAILS.clear()
     ENVIOS.clear()
     REMARCADOS.clear()
+    CANCELADOS.clear()
+    DOCS_ATUALIZADOS.clear()
     LIXEIRA.clear()
+    LOGINS.clear()
+    g.ESTADO["desconectado"] = None
+    g.ESTADO["login"].update(rodando=False, erro=None, conta=None)
+    sincronia.ESTADO["outros_pcs"] = {}
     reunioes.TAREFA.update(ativa=False, etapa="", pct=0, erro=None, event_id=None)
     entrar("A")
     SUJOS.update(PCS)

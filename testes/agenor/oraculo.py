@@ -249,7 +249,9 @@ def trocar(m):
         cobrar(u in cfin, "S8-cliente-sumiu", f"cliente {membros[0]['nome']!r} ({u[:6]}) sumiu na troca")
         todos = {m["uuid"] for m in membros} | {k for k in ap if canon(k) == u} | {u}
         cobrar(u == min(todos), "S12-uuid-que-fica-nao-e-o-menor", f"grupo {sorted(x[:6] for x in todos)} ficou com {u[:6]}")
-        melhor = max(membros, key=lambda c: (c["atualizado_em"] or "", c["uuid"]))
+        # mesmo desempate de db._mais_recente: data, uuid e, empatando os dois, o proprio conteudo
+        melhor = max(membros, key=lambda c: (c["atualizado_em"] or "", c["uuid"], str(c["nome"] or ""),
+                                             str(c.get("emails") or ""), int(c["excluido"] or 0)))
         f = cfin[u]
         cobrar((f["nome"], f["excluido"], f.get("emails", "")) == (melhor["nome"], melhor["excluido"], melhor.get("emails", "")),
                "S7-cliente-mais-recente-perdido",

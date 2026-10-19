@@ -1,0 +1,24 @@
+#!/bin/sh
+# Antes de cada push: os defeitos ja consertados (corpus do Agenor) nao podem voltar, e toda rota ou funcao de
+# db.py nova precisa de acao no catalogo (ou de explicacao em SEM_ACAO). Numa emergencia: git push --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 1
+PY=.venv/Scripts/python.exe
+[ -x "$PY" ] || PY=.venv/bin/python
+if [ ! -x "$PY" ]; then
+    echo "[agenor] sem .venv: pulei a verificacao"
+    exit 0
+fi
+SAIDA="$(mktemp)"
+trap 'rm -f "$SAIDA"' EXIT
+echo "[agenor] conferindo cobertura e corpus de regressao antes do push..."
+if ! "$PY" testes/agenor/frente.py --cobertura >"$SAIDA" 2>&1; then
+    grep -E "sem acao|SEM EXPLICACAO" "$SAIDA"
+    echo "[agenor] push barrado: ha rota/funcao nova sem acao no catalogo do Agenor (veja testes/agenor/LEIAME.md)"
+    exit 1
+fi
+if ! "$PY" testes/agenor/frente.py --corpus >"$SAIDA" 2>&1; then
+    grep -E "^(FALHOU|AVISO)|Error" "$SAIDA"
+    echo "[agenor] push barrado: um defeito ja consertado voltou (rode: $PY testes/agenor/frente.py --corpus)"
+    exit 1
+fi
+echo "[agenor] ok: $(grep -c '^ok ' "$SAIDA") caso(s) do corpus passaram"
