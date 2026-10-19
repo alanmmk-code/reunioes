@@ -12,6 +12,7 @@ import config
 import db
 import envio
 import google_services as g
+import service_desk
 
 TELAS = config.BASE_DIR / "telas"
 
@@ -50,6 +51,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             c=resumo, grupos=clientes.agrupar_pendencias(resumo["dele"], reunioes_cli, c["nome"]), contatos=clientes.contatos(cliente_id), reunioes=reunioes_cli,
             proximas=clientes.proximas_reunioes(cliente_id, _eventos(0, 30), sugerir_cliente),
             notas=db.notas(cliente_id), resposta=None,
+            sd=service_desk.casos_do_cliente(c["nome"]),
         )
 
     @app.post("/cliente/<int:cliente_id>/nota")

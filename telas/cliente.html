@@ -49,6 +49,13 @@ box.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{u
 <form class="inline" method="post" action="{{ url_for('cancelar_reuniao', event_id=e.id, voltar=request.full_path) }}" onsubmit='return confirm({{ ("Cancelar a reunião “" ~ e.titulo ~ "”? Ela sai da agenda e os convidados recebem o cancelamento.")|tojson }})'><button class="sec" title="Cancelar para todos">Cancelar</button></form>{% endif %}</span></div>
 {% else %}<div class="li mut">Nenhuma marcada nos próximos 30 dias. <a href="{{ url_for('nova_reuniao', cliente=c.id) }}">Marcar</a></div>{% endfor %}</section>
 
+{% if sd and sd.casos %}<section class="box"><div class="box-h"><h2>Service Desk (Linx)</h2>
+<span class="mut">{{ sd.casos|selectattr('aberto')|list|length }} em aberto{% if sd.atualizado %} · planilha de {{ sd.atualizado[8:10] }}/{{ sd.atualizado[5:7] }} {{ sd.atualizado[11:16] }}{% endif %}</span></div>
+{% for s in sd.casos %}<div class="li"><span><b>{{ s.caso }}</b> {{ s.solicitacao }}
+<span class="mut">· {{ s.status }}{% if s.horas %} · {{ s.horas }}h{% endif %}{% if s.chamado %} · chamado {{ s.chamado }}{% if s.analista %} ({{ s.analista }}){% endif %}{% endif %}{% if s.proxima %} · reunião {{ s.proxima[0:5] }} {{ s.proxima[11:16] }}{% endif %}</span></span>
+<span class="mut">{{ s.valor }}</span></div>
+{% endfor %}</section>{% endif %}
+
 <section class="box"><div class="box-h"><h2>Contatos</h2><span class="mut">das reuniões</span></div>
 {% for p in contatos %}<div class="li"><span>{{ p.nome or p.email }}{% if p.nome %} <span class="mut">· {{ p.email }}</span>{% endif %}</span>
 <span class="mut">{{ p.reunioes }} reuni{{ 'ões' if p.reunioes != 1 else 'ão' }}</span></div>
