@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import wave
 import webbrowser
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -33,6 +34,7 @@ import envio
 import extras
 import google_services as g
 import gravador
+import ia
 import lembretes
 import monitor
 import service_desk
@@ -94,7 +96,9 @@ def _sincronizar_apos_alteracao(resposta):
     return resposta
 AO_VIVO: assistente.AoVivo | None = None  # assistente da reunião em andamento
 # Andamento do processamento depois que a gravação para (transcrição -> ata)
-TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None, "titulo": "", "transcricao_salva": None}
+TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None, "titulo": "", "transcricao_salva": None,
+          "cancelavel": False, "cancelada": False}
+CANCELAR_ATA = threading.Event()  # ligado pelo botão Cancelar; conferido na transcrição e na chamada ao Claude
 
 
 # ---------------------------------------------------------------- Lógica principal
@@ -104,6 +108,8 @@ def processar(reuniao: dict, transcricao: str, origem: str) -> dict:
     cli = db.cliente(reuniao.get("cliente_id"))
     reuniao = {**reuniao, "cliente_id": cli["id"] if cli else None, "cliente_nome": cli["nome"] if cli else None}
     ata = analisador.gerar_ata(transcricao, reuniao)
+    ia.conferir_cancelamento()
+    TAREFA["cancelavel"] = False  # daqui em diante cria o Google Doc: não dá mais para voltar atrás pela metade
     html = atas.para_html(ata, reuniao)
     data = reuniao.get("inicio", "")[:10]
     doc_link = g.criar_google_doc(f"Ata - {ata.titulo} - {data}", html)
@@ -176,11 +182,45 @@ def processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool = False) -> N
         _processar_gravacao(reuniao, arquivos, avisar)
 
 
-def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
-    TAREFA.update(ativa=True, etapa="Transcrevendo o áudio", pct=0, erro=None, transcricao_salva=None,
-                  event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
+def _comecar_tarefa(reuniao: dict, etapa: str, pct: int) -> None:
+    CANCELAR_ATA.clear()
+    ia.cancelavel(CANCELAR_ATA)
+    TAREFA.update(ativa=True, etapa=etapa, pct=pct, erro=None, transcricao_salva=None, cancelavel=True,
+                  cancelada=False, event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
+
+
+def _progresso_da_transcricao(pct: int) -> None:
+    TAREFA.update(pct=pct)
+    ia.conferir_cancelamento()  # o Whisper avisa o andamento a cada trecho: é ali que o Cancelar entra
+
+
+def _ata_cancelada(reuniao: dict, arquivos: dict, ao_vivo: str = "") -> None:
+    """Cancelada pelo usuário: a gravação volta para 'aguardando decisão' (dá para gerar depois ou apagar)."""
+    TAREFA.update(cancelada=True, etapa="Cancelada")
+    voce = arquivos.get("voce")
+    if voce is None:
+        return
+    pid = Path(voce).name.removesuffix("-voce.wav")
+    arq = config.GRAVACOES_DIR / f"{pid}.json"
+    dados = _ler_pendente(arq) if arq.exists() else None
+    if dados:
+        dados.pop("resolvida", None)
+        _gravar_pendente(pid, dados)
+        return
+    segundos = 0.0
     try:
-        texto = gravador.transcrever(arquivos, progresso=lambda p: TAREFA.update(pct=p), reuniao=reuniao)
+        with wave.open(str(voce)) as w:
+            segundos = w.getnframes() / w.getframerate()
+    except (OSError, wave.Error, ZeroDivisionError):
+        pass
+    salvar_pendente(reuniao, {n: Path(c) for n, c in arquivos.items()}, ao_vivo, segundos)
+
+
+def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
+    _comecar_tarefa(reuniao, "Transcrevendo o áudio", 0)
+    try:
+        texto = gravador.transcrever(arquivos, progresso=_progresso_da_transcricao, reuniao=reuniao)
+        ia.conferir_cancelamento()
         if not texto:
             raise RuntimeError("Nenhuma fala foi reconhecida no áudio gravado.")
         # Guarda a transcrição antes de chamar o Claude, para não perdê-la se algo falhar
@@ -197,28 +237,34 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
         if avisar:
             monitor.notificar("Ata pronta", f"{reuniao.get('titulo', '')} — abrindo suas tarefas")
             webbrowser.open(f"http://localhost:{config.PORTA}{tarefas_da_ata(reuniao['id'])}")
+    except ia.Cancelado:
+        _ata_cancelada(reuniao, arquivos)
     except Exception as e:
         traceback.print_exc()
         TAREFA.update(erro=str(e))
         if avisar:
             monitor.notificar("Erro ao gerar a ata", str(e)[:150])
     finally:
-        TAREFA["ativa"] = False
+        ia.cancelavel(None)
+        TAREFA.update(ativa=False, cancelavel=False)
 
 
-def processar_texto(reuniao: dict, texto: str) -> None:
-    """Gera a ata a partir de uma transcrição já pronta (ex.: a feita ao vivo, quando o áudio está em outro PC)."""
+def processar_texto(reuniao: dict, texto: str, arquivos: dict | None = None) -> None:
+    """Gera a ata a partir de uma transcrição já pronta (ex.: a feita ao vivo, quando o áudio está em outro PC).
+    `arquivos` são os da gravação pendente, para ela voltar a aguardar decisão se o usuário cancelar."""
     with _fila_processamento:
-        TAREFA.update(ativa=True, etapa="Escrevendo a ata com o Claude", pct=100, erro=None, transcricao_salva=None,
-                      event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
+        _comecar_tarefa(reuniao, "Escrevendo a ata com o Claude", 100)
         try:
             processar(reuniao, texto, "Transcrição feita ao vivo")
             TAREFA.update(etapa="Concluído")
+        except ia.Cancelado:
+            _ata_cancelada(reuniao, arquivos or {}, texto)
         except Exception as e:
             traceback.print_exc()
             TAREFA.update(erro=str(e))
         finally:
-            TAREFA["ativa"] = False
+            ia.cancelavel(None)
+            TAREFA.update(ativa=False, cancelavel=False)
 
 
 # ---------------------------------------------------------------- Gravação automática
@@ -1092,11 +1138,26 @@ def parar():
     if GRAVADOR.ativo:
         try:
             reuniao, arquivos, _ = encerrar_gravacao()
-            TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=reuniao["id"])
+            TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, cancelada=False, event_id=reuniao["id"])
             threading.Thread(target=processar_gravacao, args=(reuniao, arquivos), daemon=True).start()
         except Exception as e:
             flash(str(e))
     return redirect(url_for("gravacao"))
+
+
+@app.post("/gravacao/cancelar-ata")
+def cancelar_ata():
+    if TAREFA["ativa"] and TAREFA["cancelavel"]:
+        CANCELAR_ATA.set()
+        TAREFA.update(etapa="Cancelando")
+    elif TAREFA["ativa"] and TAREFA["etapa"] == "Preparando":
+        flash("A geração da ata ainda está começando. Tente cancelar de novo em alguns segundos.")
+    elif TAREFA["ativa"]:
+        flash("A ata já está sendo salva no Google Docs; não dá mais para cancelar.")
+    voltar = request.form.get("voltar", "")
+    if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar or not voltar.isprintable():
+        voltar = url_for("gravacao")
+    return redirect(voltar)
 
 
 # ---------------------------------------------------------------- API da janelinha de sugestões
@@ -1185,11 +1246,11 @@ def pendente_gerar(pid):
             flash("O áudio desta reunião está em outro PC. Gere a ata por lá.")
             return redirect(url_for("pendente", pid=pid))
         _resolver_pendente(pid, p, "ata")
-        TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, event_id=p["reuniao"]["id"])
+        TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, cancelada=False, event_id=p["reuniao"]["id"])
         if arquivos:
             threading.Thread(target=processar_gravacao, args=(p["reuniao"], arquivos), daemon=True).start()
         else:
-            threading.Thread(target=processar_texto, args=(p["reuniao"], p["transcricao_ao_vivo"]), daemon=True).start()
+            threading.Thread(target=processar_texto, args=(p["reuniao"], p["transcricao_ao_vivo"], p["arquivos"]), daemon=True).start()
     return redirect(url_for("gravacao"))
 
 
@@ -1205,7 +1266,7 @@ def pendente_descartar(pid):
 
 @app.route("/gravacao")
 def gravacao():
-    if not GRAVADOR.ativo and not TAREFA["ativa"] and not TAREFA["erro"] and TAREFA["event_id"]:
+    if not GRAVADOR.ativo and not TAREFA["ativa"] and not TAREFA["erro"] and not TAREFA["cancelada"] and TAREFA["event_id"]:
         if atas.carregar(TAREFA["event_id"]):
             return redirect(tarefas_da_ata(TAREFA["event_id"]))
     return pagina(
@@ -1220,6 +1281,12 @@ Use <b>fone de ouvido</b> para a transcrição separar melhor quem falou.</p>
 {% if tarefa.etapa.startswith('Transcrevendo') %}<p>{{ tarefa.pct }}% concluído</p>
 <p class="mut">No primeiro uso o Whisper baixa o modelo de voz (alguns minutos). A transcrição roda no seu PC
 e leva aproximadamente de 1/4 a 1/2 da duração da reunião.</p>{% endif %}
+{% if tarefa.cancelavel and tarefa.etapa != 'Cancelando' %}<form method="post" action="{{ url_for('cancelar_ata') }}"
+onsubmit="return confirm('Cancelar a criação da ata? A gravação fica guardada para você gerar depois.')">
+<button class="sec" style="color:var(--err)">Cancelar criação da ata</button></form>{% endif %}
+{% elif tarefa.cancelada %}<h1>Criação da ata cancelada</h1>
+<p>A gravação ficou guardada em "Gravação aguardando decisão" no painel: dá para gerar a ata depois ou apagar.</p>
+<p><a class="btn" href="{{ url_for('inicio') }}">Voltar ao painel</a></p>
 {% elif tarefa.erro %}<h1>Algo deu errado</h1><p>{{ tarefa.erro }}</p>
 {% if tarefa.transcricao_salva %}<p class="mut">A transcrição foi salva em {{ tarefa.transcricao_salva }}.
 Você pode colá-la em "Colar transcrição".</p>{% endif %}

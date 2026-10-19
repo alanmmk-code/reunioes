@@ -201,8 +201,14 @@ g.enviar_email = lambda dest, assunto, html: EMAILS.append(dest)
 g.agendar_followup = lambda *a, **k: {"link_evento": "https://x", "link_meet": "https://y"}
 
 
+GANCHO_ATA = {"fn": None}  # chamado dentro do gerar_ata falso (a acao de cancelar aperta o botao ali, como no meio do Claude)
+
+
 def _gerar_ata(transcricao, reuniao):
     r = RNG["r"]
+    if GANCHO_ATA["fn"]:
+        GANCHO_ATA["fn"]()
+        ia.conferir_cancelamento()  # o _via_claude_code de verdade confere ao entrar e mata o processo quando o evento liga
     prazos = ["A definir", "", "2030-01-15", "amanha", (datetime.now().date() + timedelta(days=r.randint(-5, 5))).isoformat()]
     return analisador.Ata(
         titulo="Ata falsa", resumo="Resumo. " * r.randint(1, 30), participantes=["A"],
@@ -234,6 +240,8 @@ g.reconectar = _reconectar
 sincronia.enviar_copias = lambda *a, **k: 0
 sincronia.PC = "PC-TESTE"  # o nome de verdade do PC nao entra em semente (o repositorio e publico)
 reunioes.sincronia = sincronia
+PROCESSAR_GRAVACAO_REAL = reunioes._processar_gravacao  # a acao "cancelar a criacao da ata" roda o de verdade, em linha
+PROCESSAR_TEXTO_REAL = reunioes.processar_texto
 reunioes.processar_gravacao = lambda *a, **k: None
 reunioes.processar_texto = lambda *a, **k: None
 reunioes._encerrar_processo = lambda: None  # /reiniciar nunca derruba o teste (e o Popen ja e bloqueado)
@@ -278,7 +286,10 @@ def novo_mundo(semente):
     g.ESTADO["desconectado"] = None
     g.ESTADO["login"].update(rodando=False, erro=None, conta=None)
     sincronia.ESTADO["outros_pcs"] = {}
-    reunioes.TAREFA.update(ativa=False, etapa="", pct=0, erro=None, event_id=None)
+    reunioes.TAREFA.update(ativa=False, etapa="", pct=0, erro=None, event_id=None, cancelavel=False, cancelada=False)
+    reunioes.CANCELAR_ATA.clear()
+    ia.cancelavel(None)
+    GANCHO_ATA["fn"] = None
     entrar("A")
     SUJOS.update(PCS)
     return reunioes.app.test_client()

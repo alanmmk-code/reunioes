@@ -33,6 +33,7 @@
   "/gerar/<event_id>",
   "/google/conectar",
   "/gravacao",
+  "/gravacao/cancelar-ata",
   "/gravar/<event_id>",
   "/manual/<event_id>",
   "/nota/<int:nota_id>/excluir",

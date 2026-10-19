@@ -1,5 +1,7 @@
 """Catalogo v6 = catalogo v5 (acoes5.py, CONGELADO) + copias de seguranca (voltar e desfazer), "Reconectar Google"
 e o aviso de PC que parou de sincronizar."""
+import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -242,7 +244,7 @@ def f_cancelar_reuniao(m, r):
         envio.convite_do_evento = lambda eid: {"entry_id": "entrada-falsa"}
     n_envios = len(amb.ENVIOS)
     amb.CANCELADOS.clear()
-    voltar = r.choice(["/", "/clientes", "https://evil.example/", "//evil.example", "/\\evil.example", ""])
+    voltar = r.choice(["/", "/clientes", "https://evil.example/", "//evil.example", "/\\evil.example", "/\n/evil.example", ""])
     try:
         pc, resp = chamar(m, r, "post", f"/reuniao/{ev['id']}/cancelar", data={"voltar": voltar})
     finally:
@@ -338,6 +340,164 @@ def f_editar_ata(m, r):
     return f"{pc} editou ata {ev} ({len(velhas)} -> {len(acoes_salvas)} acoes)"
 
 
+# ----------------------------------------------------------------------------- cancelar a criacao da ata
+
+def _wav(caminho, segundos=1):
+    import wave
+    with wave.open(str(caminho), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\x00\x00" * 8000 * segundos)
+
+
+def _bytes_dos_arquivos():
+    return {p.name: p.read_bytes() for p in amb.config.GRAVACOES_DIR.iterdir() if p.suffix in (".wav", ".webm")}
+
+
+def _pend(pid):
+    return next((p for p in amb.reunioes.listar_pendentes() if p["pid"] == pid), None)
+
+
+VOLTAR_ATA = ["/", "/clientes", "", "https://evil.example/", "//evil.example", "/\\evil.example", "/\t/evil.example",
+              "/\n/evil.example", "javascript:alert(1)", "http://localhost@evil.example", "\\\\evil.example", "/%0d%0aX:y"]
+
+
+def _para_fora(destino):
+    """O Location, lido como o navegador le (ele tira tab e quebra de linha), vai para outro site?"""
+    d = re.sub(r"[\t\r\n]", "", destino or "").replace("\\", "/")
+    return not d.startswith("/") or d.startswith("//") or "evil.example" in d
+
+
+def f_cancelar_ata(m, r):
+    """Cancelar a criacao da ata (transcricao / Claude / depois do ponto sem volta / sem tarefa), pelo codigo de
+    verdade (reunioes._processar_gravacao e processar_texto), com Whisper e Claude falsos que apertam o botao."""
+    pc = m.pc(r)
+    modo = r.choice(["gravacao", "texto"])
+    fase = r.choice(["transcricao", "claude", "depois", "nenhuma", "sem-tarefa"] if modo == "gravacao"
+                    else ["claude", "depois", "nenhuma", "sem-tarefa"])
+    pid = f"reuniao-2030{m.prox():04d}"
+    pasta = amb.config.GRAVACOES_DIR
+    arquivos = {"voce": pasta / f"{pid}-voce.wav", "outros": pasta / f"{pid}-outros.wav"}
+    for c in arquivos.values():
+        _wav(c, r.randint(1, 3))
+    ev = r.choice(["ev1", "ev2"])
+    reuniao = {"id": ev, "titulo": "Reuniao", "inicio": "2030-01-01T10:00", "cliente_id": None}
+    nomes = {n: c.name for n, c in arquivos.items()}
+    ja_tinha_json = modo == "texto" or r.random() < 0.6
+    if ja_tinha_json:  # como o pendente_gerar deixa: decidida "ata" enquanto gera
+        (pasta / f"{pid}.json").write_text(json.dumps(
+            {"reuniao": reuniao, "arquivos": nomes, "transcricao_ao_vivo": "texto ao vivo", "minutos": 1,
+             "encerrada_em": "2030-01-01T10:05", "resolvida": "ata", "atualizado_em": db.agora()}), encoding="utf-8")
+
+    docs = []
+    original_doc = g.criar_google_doc
+    g.criar_google_doc = lambda titulo, html: (docs.append(titulo), original_doc(titulo, html))[1]
+    original_transcrever = amb.reunioes.gravador.transcrever
+    cliques = []
+    cliques_em = r.choice([10, 50, 90])
+    clicou = []
+
+    def apertar():
+        pc2, resp = chamar(m, r, "post", "/gravacao/cancelar-ata", data={"voltar": "/"})
+        cliques.append(resp.status_code)
+
+    def transcrever_falso(arqs, progresso=lambda p: None, reuniao=None):
+        for pct in (10, 50, 90):
+            progresso(pct)
+            if fase == "transcricao" and pct == cliques_em and not clicou:
+                clicou.append(1)
+                apertar()
+                progresso(pct + 1)  # o Whisper segue avisando; o proximo aviso e onde o Cancelar entra
+        return "texto transcrito"
+
+    if fase == "claude":
+        amb.GANCHO_ATA["fn"] = apertar
+    elif fase == "depois":
+        g.criar_google_doc = lambda titulo, html: (apertar(), docs.append(titulo), original_doc(titulo, html))[2]
+    ata_arq = amb.config.ATAS_DIR / f"{ev}.json"
+    antes = {"tarefas": o.linhas("tarefas"), "audios": _bytes_dos_arquivos(),
+             "ata": ata_arq.read_bytes() if ata_arq.exists() else None}
+    T = amb.reunioes.TAREFA
+
+    def gerar():
+        amb.reunioes.gravador.transcrever = transcrever_falso
+        try:
+            if modo == "gravacao":
+                amb.PROCESSAR_GRAVACAO_REAL(reuniao, arquivos, False)
+            else:
+                amb.PROCESSAR_TEXTO_REAL(reuniao, "texto da reuniao", nomes)
+        finally:
+            amb.reunioes.gravador.transcrever = original_transcrever
+
+    try:
+        if fase == "sem-tarefa":
+            tarefa0 = dict(T)
+            ligado0 = amb.reunioes.CANCELAR_ATA.is_set()  # sobra de um cancelamento anterior e legitima: o evento so e limpo ao comecar
+            apertar()
+            cobrar(cliques == [302], "I40-cancelar-sem-tarefa-rota", f"{pc}: cancelar sem tarefa -> {cliques}")
+            cobrar(amb.reunioes.CANCELAR_ATA.is_set() == ligado0, "I40-cancelar-sem-tarefa-vaza",
+                   f"{pc}: cancelar sem tarefa ativa deixou o evento ligado (vaza para a proxima ata)")
+            cobrar(dict(T) == tarefa0, "I40-cancelar-sem-tarefa-mexeu", f"{pc}: TAREFA {tarefa0} -> {T}")
+            cobrar(o.linhas("tarefas") == antes["tarefas"] and _bytes_dos_arquivos() == antes["audios"], "I40-cancelar-sem-tarefa-mexeu",
+                   f"{pc}: cancelar sem tarefa mudou tarefas/audios")
+            # e a ata seguinte sai normal
+        gerar()
+    finally:
+        g.criar_google_doc = original_doc
+        amb.reunioes.gravador.transcrever = original_transcrever
+        amb.GANCHO_ATA["fn"] = None
+    cobrar(not T["ativa"] and not T["cancelavel"], "I40-tarefa-ficou-ativa", f"{pc}: {fase}: TAREFA ficou {T}")
+    if fase in ("transcricao", "claude"):
+        cobrar(cliques == [302], "I40-cancelar-rota", f"{pc}: {fase}: clique -> {cliques}")
+        cobrar(T["cancelada"] and not T["erro"], "I40-cancelada-nao-marcou", f"{pc}: {fase}: cancelada={T['cancelada']} erro={T['erro']!r}")
+        cobrar((ata_arq.read_bytes() if ata_arq.exists() else None) == antes["ata"], "I40-cancelada-criou-ata", f"{pc}: {fase}: ata de {ev} mudou apos cancelar")
+        cobrar(not docs, "I40-cancelada-criou-doc", f"{pc}: {fase}: criou Google Doc {docs}")
+        cobrar(o.linhas("tarefas") == antes["tarefas"], "I40-cancelada-importou-tarefas", f"{pc}: {fase}: tarefas mudaram apos cancelar")
+        cobrar(_bytes_dos_arquivos() == antes["audios"], "I40-cancelada-apagou-audio", f"{pc}: {fase}: audios mudaram: {set(antes['audios']) ^ set(_bytes_dos_arquivos())}")
+        p = _pend(pid)
+        cobrar(p is not None, "I40-cancelada-sumiu-da-lista", f"{pc}: {fase}/{modo}/json={ja_tinha_json}: {pid} nao esta em listar_pendentes()")
+        cobrar(p["arquivos"] == nomes, "I40-cancelada-arquivos-trocados", f"{pc}: {fase}: arquivos {p['arquivos']} != {nomes}")
+        cobrar(p["reuniao"].get("id") == ev, "I40-cancelada-reuniao-trocada", f"{pc}: {fase}: reuniao {p['reuniao'].get('id')} != {ev}")
+        if r.random() < 0.5:  # o cancelamento nao vaza: a geracao seguinte, sem cancelar, termina
+            nomes.update(p["arquivos"])
+            amb.GANCHO_ATA["fn"] = None
+            gerar()
+            cobrar(not T["cancelada"] and not T["erro"] and T["etapa"] == "Concluído", "I40-cancelamento-vazou",
+                   f"{pc}: depois de cancelar ({fase}), a geracao seguinte saiu cancelada={T['cancelada']} erro={T['erro']!r} etapa={T['etapa']!r}")
+            cobrar(amb.atas.carregar(ev) is not None, "I40-cancelamento-vazou-sem-ata", f"{pc}: geracao seguinte a cancelada nao criou ata")
+    elif fase == "depois":
+        cobrar(cliques == [302], "I40-cancelar-tarde-rota", f"{pc}: cancelar tarde -> {cliques}")
+        cobrar(not T["cancelada"] and not T["erro"], "I40-cancelar-tarde-cancelou", f"{pc}: cancelar depois do ponto sem volta: cancelada={T['cancelada']} erro={T['erro']!r}")
+        cobrar(len(docs) == 1 and amb.atas.carregar(ev) is not None, "I40-cancelar-tarde-sem-ata", f"{pc}: cancelar tarde: docs={docs} ata={amb.atas.carregar(ev) is not None}")
+        cobrar(not amb.reunioes.CANCELAR_ATA.is_set(), "I40-cancelar-tarde-vaza", f"{pc}: cancelar tarde ligou o evento")
+        cobrar(T["etapa"] == "Concluído", "I40-cancelar-tarde-etapa", f"{pc}: etapa {T['etapa']!r}")
+    else:
+        cobrar(not T["cancelada"] and not T["erro"] and T["etapa"] == "Concluído", "I40-sem-cancelar-nao-concluiu",
+               f"{pc}: {fase}: cancelada={T['cancelada']} erro={T['erro']!r} etapa={T['etapa']!r}")
+        cobrar(len(docs) == 1 and amb.atas.carregar(ev) is not None, "I40-sem-cancelar-sem-ata", f"{pc}: {fase}: docs={docs}")
+    return f"{pc} {modo}/{fase} json={ja_tinha_json}"
+
+
+def f_cancelar_ata_voltar_hostil(m, r):
+    """O campo `voltar` do Cancelar nunca leva para fora, com tarefa ativa ou sem ela; e nunca estoura."""
+    pc = m.pc(r)
+    T = amb.reunioes.TAREFA
+    salvo = dict(T)
+    if r.random() < 0.5:
+        T.update(ativa=True, cancelavel=r.random() < 0.7)
+    voltar = r.choice(VOLTAR_ATA)
+    try:
+        pc, resp = chamar(m, r, "post", "/gravacao/cancelar-ata", data={"voltar": voltar})
+    finally:
+        T.update(salvo)
+        amb.reunioes.CANCELAR_ATA.clear()
+    destino = resp.headers.get("Location", "") if hasattr(resp, "headers") else ""
+    cobrar(resp.status_code in (302, 303), "I41-cancelar-ata-voltar-rota", f"{pc}: voltar={voltar!r} -> {resp.status_code}")
+    cobrar(not _para_fora(destino), "I41-cancelar-ata-redireciona-para-fora", f"{pc}: voltar={voltar!r} -> Location {destino!r}")
+    return f"{pc} cancelar-ata voltar={voltar[:20]!r}"
+
+
 ACOES6 = A5.ACOES5 + [
     Acao("tirar copia de seguranca", f_tirar_copia, 2, cobre=["db.copia_de_seguranca"]),
     Acao("voltar para uma copia (e desfazer)", f_voltar_copia, 3, False, ["/copias/voltar", "db.restaurar_copia", "db.copias"]),
@@ -347,6 +507,8 @@ ACOES6 = A5.ACOES5 + [
     Acao("sinal de vida hostil no Drive", f_sinal_de_vida_hostil, 1, True, ["sincronia._sinal_de_vida"]),
     Acao("cancelar reuniao", f_cancelar_reuniao, 2, True, ["/reuniao/<event_id>/cancelar"]),
     Acao("editar ata", f_editar_ata, 3, False, ["/ata/<event_id>/editar", "db.atualizar_acoes_da_ata"]),
+    Acao("cancelar a criacao da ata", f_cancelar_ata, 3, False, ["/gravacao/cancelar-ata", "reunioes.listar_pendentes"]),
+    Acao("cancelar a ata com voltar hostil", f_cancelar_ata_voltar_hostil, 1, True, ["/gravacao/cancelar-ata"]),
 ]
 SEM_ACAO = A5.SEM_ACAO
 SEM_FUZZ = A5.SEM_FUZZ

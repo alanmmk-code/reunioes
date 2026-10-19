@@ -4,6 +4,7 @@ Registradas no app do painel por `registrar(...)`, chamado no fim de reunioes.py
 """
 
 from datetime import date, datetime, timedelta
+from urllib.parse import urlsplit
 
 from flask import flash, redirect, request, url_for
 
@@ -152,7 +153,10 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
     def remarcar_reuniao(event_id):
         e = g.obter_evento(event_id)
         voltar = request.values.get("voltar") or request.referrer or url_for("inicio")
-        if not voltar.startswith("/") and "localhost" not in voltar and "127.0.0.1" not in voltar:
+        partes = urlsplit(voltar)
+        if partes.hostname in ("localhost", "127.0.0.1"):  # o referrer vem com endereço completo
+            voltar = partes.path + (f"?{partes.query}" if partes.query else "")
+        if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar or not voltar.isprintable():
             voltar = url_for("inicio")
         if not e:
             flash("Reunião não encontrada no Google Agenda.")
@@ -193,7 +197,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
         """Cancela a reunião para todos: some da agenda e os convidados recebem o cancelamento (pelo Outlook, se o
         convite saiu por lá; senão, pelo Google)."""
         voltar = request.values.get("voltar") or url_for("inicio")
-        if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar:
+        if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar or not voltar.isprintable():
             voltar = url_for("inicio")
         e = g.obter_evento(event_id)
         if not e:

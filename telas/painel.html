@@ -74,7 +74,10 @@ a.stat:hover{border-color:var(--pri)}
 <span><form class="inline" method="post" action="/api/janela/abrir"><input type="hidden" name="x" value="1"><button class="sec">Mostrar janela</button></form>
 <a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></span></div>
 {% elif tarefa.ativa %}<div class="alerta pend"><b>⏳ Gerando ata: {{ tarefa.etapa }}{% if tarefa.etapa.startswith('Transcrevendo') %} ({{ tarefa.pct }}%){% endif %}</b>
-<a class="btn sec" href="{{ url_for('gravacao') }}">Acompanhar</a></div>{% endif %}
+<span style="display:flex;gap:6px"><a class="btn sec" href="{{ url_for('gravacao') }}">Acompanhar</a>
+{% if tarefa.cancelavel and tarefa.etapa != 'Cancelando' %}<form class="inline" method="post" action="{{ url_for('cancelar_ata') }}"
+onsubmit="return confirm('Cancelar a criação da ata? A gravação fica guardada para você gerar depois.')"><input type="hidden" name="voltar" value="/">
+<button class="sec" style="color:var(--err)">Cancelar</button></form>{% endif %}</span></div>{% endif %}
 {% for e in presos %}<div class="alerta rec"><b>{{ e.tipo|capitalize }} preso no Outlook ({{ e.remetente }}): "{{ e.assunto }}" para {{ e.para|join(', ') }} — enviado às {{ e.momento }}.
 Abra o Outlook e aperte F9 (Enviar/Receber).</b>
 <span style="display:flex;gap:6px"><form class="inline" method="post" action="{{ url_for('envio_acao', envio_id=e.id, acao='conferir') }}"><button class="sec">Conferir de novo</button></form>

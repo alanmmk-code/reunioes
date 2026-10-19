@@ -10,6 +10,8 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import anthropic
@@ -23,6 +25,24 @@ _PASTA_NEUTRA.mkdir(exist_ok=True)
 
 class ErroIA(RuntimeError):
     pass
+
+
+class Cancelado(Exception):
+    """O usuário cancelou o trabalho em andamento."""
+
+
+_vigia = threading.local()
+
+
+def cancelavel(evento: threading.Event | None) -> None:
+    """As chamadas ao Claude feitas nesta thread param quando `evento` for ligado (None desliga)."""
+    _vigia.evento = evento
+
+
+def conferir_cancelamento() -> None:
+    evento = getattr(_vigia, "evento", None)
+    if evento is not None and evento.is_set():
+        raise Cancelado()
 
 
 def gerar(system: str, blocos: list[str], instrucao: str, saida: type[BaseModel], effort: str = "high") -> BaseModel:
@@ -86,24 +106,45 @@ def _via_claude_code(system, blocos, instrucao, saida, effort):
         comando += ["--model", config.CLAUDE_CODE_MODELO]
     # Sem a chave da API no ambiente, o Claude Code usa o login da assinatura
     ambiente = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
-    try:
-        proc = subprocess.run(
-            comando,
-            input="\n\n".join(blocos).encode("utf-8"),
-            capture_output=True,
-            cwd=_PASTA_NEUTRA,
-            env=ambiente,
-            timeout=600,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except subprocess.TimeoutExpired:
-        raise ErroIA("O Claude Code demorou demais para responder.")
-    saida_txt = proc.stdout.decode("utf-8", errors="replace").strip()
+    conferir_cancelamento()
+    proc = subprocess.Popen(
+        comando,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=_PASTA_NEUTRA,
+        env=ambiente,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    resultado = {}
+    leitor = threading.Thread(target=lambda: resultado.update(
+        zip(("out", "err"), proc.communicate("\n\n".join(blocos).encode("utf-8")))), daemon=True)
+    leitor.start()
+    limite = time.monotonic() + 600
+    # Espera em pedaços curtos para poder atender ao Cancelar do painel
+    while leitor.is_alive():
+        leitor.join(0.5)
+        evento = getattr(_vigia, "evento", None)
+        cancelado = evento is not None and evento.is_set()
+        if leitor.is_alive() and (cancelado or time.monotonic() > limite):
+            _matar(proc)
+            leitor.join(10)
+            if cancelado:
+                raise Cancelado()
+            raise ErroIA("O Claude Code demorou demais para responder.")
+    saida_txt = resultado.get("out", b"").decode("utf-8", errors="replace").strip()
     try:
         dados = json.loads(saida_txt)
     except json.JSONDecodeError:
-        erro = proc.stderr.decode("utf-8", errors="replace").strip() or saida_txt
+        erro = resultado.get("err", b"").decode("utf-8", errors="replace").strip() or saida_txt
         raise ErroIA(f"Claude Code falhou: {erro[:300]}")
     if dados.get("is_error") or dados.get("structured_output") is None:
         raise ErroIA(f"Claude Code falhou: {str(dados.get('result') or dados.get('subtype'))[:300]}")
     return saida.model_validate(dados["structured_output"])
+
+
+def _matar(proc: subprocess.Popen) -> None:
+    """Encerra o Claude Code e o que ele tiver aberto."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if proc.poll() is None:
+        proc.kill()

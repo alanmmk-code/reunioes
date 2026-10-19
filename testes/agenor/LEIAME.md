@@ -39,7 +39,7 @@ Propriedades do v6: I30/I31 (voltar para copia reproduz tarefas/notas/clientes d
 "antes de voltar" desfaz), I33 (nome de copia hostil nao muda nada), I34/I35 (aviso e login do Google, sem login duplo), I36/I37
 (aviso de PC parado, escapado; esquecer PC), H6 (sinal de vida com appProperties estranhos), I38 (cancelar reuniao: so o organizador;
 Google ou Outlook; sem redirecionar para fora), I39 (editar ata: feita nunca some, acao nova vira tarefa, acao apagada tira a
-tarefa aberta). A agenda falsa nao perde eventos ao cancelar (testes antigos contam com ev1..ev5).
+tarefa aberta), I40 (cancelar a criacao da ata, rodando o _processar_gravacao/processar_texto de verdade com Whisper e Claude falsos que apertam o botao: nao cria ata/Doc/tarefas, nao apaga audio, a gravacao volta a listar_pendentes() com os mesmos arquivos, cancelar tarde ou sem tarefa nao muda nada, o cancelamento nao vaza), I41 (voltar hostil do Cancelar nunca sai do site nem estoura; inclui quebra de linha). A agenda falsa nao perde eventos ao cancelar (testes antigos contam com ev1..ev5).
 Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
 certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
 S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).
