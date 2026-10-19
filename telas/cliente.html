@@ -52,7 +52,7 @@ box.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{u
 {% if sd and sd.casos %}<section class="box"><div class="box-h"><h2>Service Desk (Linx)</h2>
 <span class="mut">{{ sd.casos|selectattr('aberto')|list|length }} em aberto{% if sd.atualizado %} · planilha de {{ sd.atualizado[8:10] }}/{{ sd.atualizado[5:7] }} {{ sd.atualizado[11:16] }}{% endif %}</span></div>
 {% for s in sd.casos %}<div class="li"><span><b>{{ s.caso }}</b> {{ s.solicitacao }}
-<span class="mut">· {{ s.status }}{% if s.horas %} · {{ s.horas }}h{% endif %}{% if s.chamado %} · chamado {{ s.chamado }}{% if s.analista %} ({{ s.analista }}){% endif %}{% endif %}{% if s.proxima %} · reunião {{ s.proxima[0:5] }} {{ s.proxima[11:16] }}{% endif %}{% for a in s.atas %} · <a href="{{ url_for('ver_ata', event_id=a.id) }}">ata {{ a.data }}</a>{% endfor %}</span></span>
+<span class="mut">· {{ s.status }}{% if s.horas %} · {{ s.horas }}h{% if s.usadas %} ({{ s.usadas }}h usadas){% endif %}{% endif %}{% if s.chamado %} · chamado {{ s.chamado }}{% if s.analista %} ({{ s.analista }}){% endif %}{% endif %}{% if s.proxima %} · reunião {{ s.proxima[0:5] }} {{ s.proxima[11:16] }}{% endif %}{% for a in s.atas %} · <a href="{{ url_for('ver_ata', event_id=a.id) }}">ata {{ a.data }}</a>{% endfor %}</span></span>
 <span class="mut">{{ s.valor }}</span></div>
 {% endfor %}</section>{% endif %}
 

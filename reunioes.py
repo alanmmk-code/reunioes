@@ -1674,8 +1674,15 @@ def resumo(event_id):
 
 <div class="card rs"><h3>Pauta do convite</h3>
 {% if pauta %}<p style="white-space:pre-wrap">{{ pauta }}</p>{% else %}<p class="mut">O convite não tem descrição.</p>{% endif %}</div>
+
+{% for s in sd %}<div class="card rs"><h3>Service Desk · {{ s.caso }}</h3>
+<p><b>{{ s.solicitacao }}</b> <span class="qd">· {{ s.status }}{% if s.chamado %} · chamado {{ s.chamado }}{% if s.analista %} ({{ s.analista }}){% endif %}{% endif %}</span></p>
+{% if s.horas %}<p class="{{ 'atr' if s.no_limite else 'qd' }}">{{ s.horas }}h orçadas{% if s.usadas %} · {{ s.usadas }}h já usadas{% if s.consumo %} ({{ s.consumo }}%){% endif %}{% endif %}{% if s.no_limite %} · perto do limite: avalie aditivo{% endif %}</p>{% endif %}
+{% if s.solucao %}<p class="mut" style="margin-bottom:4px">Proposta enviada:</p><p style="white-space:pre-wrap">{{ s.solucao }}</p>{% endif %}
+</div>{% endfor %}
 </div>""",
         r=r, cli=cli, res=res, anterior=anterior, inicio=inicio, faltam=faltam, pauta=pauta, clientes=db.clientes(),
+        sd=[s for s in service_desk.casos_do_cliente(cli["nome"])["casos"] if s["aberto"]] if cli else [],
     )
 
 

@@ -66,6 +66,11 @@ def casos_do_cliente(nome: str, dados: dict | None = None) -> dict:
             "analista": i.get("analista"), "chamado": i.get("chamado"),
             "proxima": i.get("proximaReuniao"), "valor": valor,
             "atas": [{"id": a["id"], "data": a["data"][8:10] + "/" + a["data"][5:7]} for a in i.get("atas") or []],
+            # para a tela antes da reunião: o que foi vendido e quanto já foi usado
+            "solucao": i.get("solucao"),
+            "usadas": f"{i['horasConsumidas']:g}".replace(".", ",") if i.get("horasConsumidas") else None,
+            "consumo": round(i["consumo"] * 100) if i.get("consumo") else None,
+            "no_limite": (i.get("consumo") or 0) >= 0.8,
         })
     return {"casos": casos, "atualizado": dados.get("atualizado")}
 
