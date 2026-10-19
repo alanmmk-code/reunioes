@@ -35,6 +35,7 @@ import google_services as g
 import gravador
 import lembretes
 import monitor
+import service_desk
 import sincronia
 
 app = Flask(__name__)
@@ -1299,6 +1300,7 @@ def ver_ata(event_id):
         """<h1>{{ a.titulo }}</h1>
 <p class="mut">{{ r.inicio[:16].replace('T',' ') }} · transcrição: {{ reg.origem_transcricao }}</p>
 <form method="post" action="{{ url_for('ata_cliente', event_id=event_id) }}" class="row" style="justify-content:flex-start"><span>Cliente:</span> {{ seletor_cliente(reg.cliente_id)|safe }} <button class="sec">Salvar</button>{% if not reg.cliente_id %}<span class="mut">defina o cliente para as tarefas aparecerem no lugar certo</span>{% endif %}</form>
+{% for s in sd %}<p class="ok">Service Desk: <b>{{ s.caso }}</b> {{ s.cliente }} · {{ s.solicitacao }} · {{ s.status }}{% if s.chamado %} · chamado {{ s.chamado }}{% if s.analista %} ({{ s.analista }}){% endif %}{% endif %}</p>{% endfor %}
 <p><a class="btn" href="{{ reg.doc_link }}" target="_blank">Abrir no Google Docs</a> <a class="btn sec" href="{{ url_for('ata_editar', event_id=event_id) }}">Editar ata</a> <a class="btn sec" href="{{ url_for('tarefas', ver='todas') }}">Ver tarefas</a>
 <a class="btn sec" href="{{ url_for('ata_excluir', event_id=event_id) }}" style="color:var(--err)">Excluir ata</a></p>
 <div class="card"><h2 style="margin-top:0">Resumo</h2><p>{{ a.resumo }}</p>
@@ -1327,6 +1329,7 @@ def ver_ata(event_id):
 <p>{{ seletor_remetente()|safe }}</p>
 <button>Criar evento com Meet</button></form>""",
         a=a, r=r, reg=reg, prox=prox, event_id=event_id, seletor_cliente=seletor_cliente,
+        sd=service_desk.casos_da_ata(event_id),
     )
 
 

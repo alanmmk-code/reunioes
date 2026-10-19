@@ -65,5 +65,14 @@ def casos_do_cliente(nome: str, dados: dict | None = None) -> dict:
             "horas": f"{i['horas']:g}".replace(".", ",") if i.get("horas") else None,
             "analista": i.get("analista"), "chamado": i.get("chamado"),
             "proxima": i.get("proximaReuniao"), "valor": valor,
+            "atas": [{"id": a["id"], "data": a["data"][8:10] + "/" + a["data"][5:7]} for a in i.get("atas") or []],
         })
     return {"casos": casos, "atualizado": dados.get("atualizado")}
+
+
+def casos_da_ata(event_id: str, dados: dict | None = None) -> list[dict]:
+    """Casos de Service Desk ligados a esta ata (a planilha liga pela agenda e pelo cliente)."""
+    dados = ler() if dados is None else dados
+    return [{"caso": i.get("caso") or "projeto direto", "cliente": i.get("cliente", ""), "status": i.get("status", ""),
+             "solicitacao": i.get("solicitacao", ""), "chamado": i.get("chamado"), "analista": i.get("analista")}
+            for i in dados.get("itens", []) if any(a.get("id") == event_id for a in i.get("atas") or [])]
