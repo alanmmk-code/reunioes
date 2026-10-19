@@ -7,12 +7,15 @@ O que vai para o Drive (pasta "Reuniões - dados do app"):
 - grav__<nome>.txt      transcrições das gravações
 - grav__<nome>.wav      áudios, só com SINCRONIZAR_AUDIO=sim (são grandes)
 - config__credentials.json  a credencial do Google, para configurar outro PC
+- pc__<nome do PC>      sinal de vida de cada PC (quando sincronizou), para avisar se um deles parou
+- copia__<PC>__dados-<data>.db  cópias diárias do banco de cada PC (as 7 mais recentes), contra perda do disco
 
 O código NÃO vai para o Drive: ele fica no GitHub (git pull).
 """
 
 import json
 import os
+import socket
 from pathlib import Path
 import threading
 import time
@@ -24,7 +27,9 @@ import config
 import db
 import google_services as g
 
-ESTADO = {"rodando": False, "ultima": None, "erro": None, "resumo": ""}
+ESTADO = {"rodando": False, "ultima": None, "erro": None, "resumo": "", "outros_pcs": {}}
+PC = (socket.gethostname() or "pc").strip() or "pc"
+PARADO_DIAS = 3  # outro PC sem sincronizar há mais que isso: o painel avisa (fim de semana desligado não conta)
 _lock = threading.Lock()
 _agendada = threading.Event()
 
@@ -93,10 +98,12 @@ def sincronizar() -> str:
         try:
             resumo = _sincronizar()
             ESTADO.update(ultima=datetime.now(), erro=None, resumo=resumo)
+            g.anotar_conexao()
             return resumo
         except Exception as e:
             traceback.print_exc()
             ESTADO["erro"] = str(e)
+            g.anotar_conexao(e)
             raise
         finally:
             ESTADO["rodando"] = False
@@ -191,6 +198,9 @@ def _sincronizar() -> str:
     elif not config.CREDENTIALS_FILE.exists() and "config__credentials.json" in remotos:
         config.CREDENTIALS_FILE.write_bytes(g.drive_baixar(remotos["config__credentials.json"]["id"]))
 
+    # 5) Sinal de vida deste PC, e quando cada um dos outros sincronizou pela última vez
+    _sinal_de_vida(pasta, remotos)
+
     partes = []
     if apagados:
         partes.append(f"{apagados} item(ns) excluído(s)")
@@ -201,6 +211,78 @@ def _sincronizar() -> str:
     if enviados:
         partes.append(f"{enviados} arquivo(s) enviados")
     return ", ".join(partes) or "Tudo em dia"
+
+
+def _data(texto) -> datetime | None:
+    """Data/hora com fuso de um appProperties (ou None, se vier qualquer outra coisa)."""
+    try:
+        quando = datetime.fromisoformat(texto) if isinstance(texto, str) else None
+    except ValueError:
+        return None
+    return quando if quando and quando.tzinfo else None
+
+
+def _quando_remoto(arquivo) -> datetime | None:
+    props = arquivo.get("appProperties") if isinstance(arquivo, dict) else None
+    return _data(props.get("atualizado_em")) if isinstance(props, dict) else None
+
+
+def _sinal_de_vida(pasta, remotos: dict) -> None:
+    meu_nome = f"pc__{PC}"
+    meu = remotos.get(meu_nome)
+    antes = _quando_remoto(meu)
+    agora = datetime.now(timezone.utc)
+    if antes is None or (agora - antes).total_seconds() >= 3600:  # no máximo uma escrita por hora
+        g.drive_enviar(pasta, meu_nome, b"{}", file_id=meu["id"] if meu else None,
+                       props={"atualizado_em": agora.isoformat(timespec="seconds")})
+    outros = {}
+    for nome, arquivo in remotos.items():
+        quando = _quando_remoto(arquivo)
+        if nome.startswith("pc__") and nome != meu_nome and len(nome) > 4 and quando:
+            outros[nome[4:]] = quando
+    ESTADO["outros_pcs"] = outros
+
+
+def pcs_parados(dias: float = PARADO_DIAS) -> list[tuple[str, datetime]]:
+    """Outros PCs que não sincronizam há mais de `dias` (do mais antigo ao mais recente)."""
+    agora = datetime.now(timezone.utc)
+    return sorted(((pc, q) for pc, q in ESTADO["outros_pcs"].items() if (agora - q).total_seconds() > dias * 86400),
+                  key=lambda x: x[1])
+
+
+def esquecer_pc(pc: str) -> bool:
+    """Tira do Drive o sinal de vida de um PC que não é mais usado (o aviso dele some)."""
+    if not isinstance(pc, str) or pc not in ESTADO["outros_pcs"]:
+        return False
+    pasta = g.drive_pasta(config.PASTA_DRIVE)
+    arquivo = g.drive_listar(pasta).get(f"pc__{pc}")
+    if arquivo:
+        g.drive_apagar(arquivo["id"])
+    ESTADO["outros_pcs"].pop(pc, None)
+    return True
+
+
+def enviar_copias(manter: int = 7) -> int:
+    """Sobe ao Drive as cópias diárias do banco deste PC (copia__<PC>__dados-<data>.db) e deixa lá só as
+    `manter` mais recentes. As cópias locais somem junto com o disco; estas, não."""
+    if not config.SINCRONIZAR:
+        return 0
+    locais = sorted((db.ARQUIVO.parent / "copias").glob("dados-*.db"))[-manter:]
+    if not locais:
+        return 0
+    pasta = g.drive_pasta(config.PASTA_DRIVE)
+    remotos = g.drive_listar(pasta)
+    prefixo = f"copia__{PC}__"
+    enviadas = 0
+    for copia in locais:
+        if prefixo + copia.name not in remotos:
+            g.drive_enviar(pasta, prefixo + copia.name, caminho=copia, mimetype="application/octet-stream")
+            enviadas += 1
+    todas = sorted({n for n in remotos if n.startswith(prefixo)} | {prefixo + c.name for c in locais})
+    for velha in todas[:-manter]:
+        if velha in remotos:
+            g.drive_apagar(remotos[velha]["id"])
+    return enviadas
 
 
 def agendar(atraso: float = 8) -> None:

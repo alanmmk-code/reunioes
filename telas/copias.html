@@ -1,0 +1,14 @@
+<h1>Cópias de segurança</h1>
+<p class="mut">Uma cópia por dia dos clientes, tarefas, anotações e pessoas (as atas ficam à parte, nos arquivos e no Drive); as 7 mais recentes também vão para o Drive.
+Voltar para uma cópia traz de volta o que foi alterado ou excluído depois dela, também nos outros PCs; o que foi criado depois continua.
+Antes de voltar, guardo o estado de agora como “antes de voltar”, para você poder desfazer.</p>
+<section class="box"><table>
+<tr><th>Data</th><th>Clientes</th><th>Tarefas abertas</th><th>Anotações</th><th></th></tr>
+{% for c in copias %}<tr><td>{{ c.quando.strftime('%d/%m/%Y') }}{% if c.antes_de_voltar %} {{ c.quando.strftime('%H:%M') }} <span class="mut">· antes de voltar</span>{% endif %}</td>
+{% if c.legivel %}<td>{{ c.clientes }}</td><td>{{ c.tarefas }}</td><td>{{ c.notas }}</td>
+<td><form method="post" action="{{ url_for('copias_voltar') }}"
+ onsubmit='return confirm({{ ("Voltar para a cópia de " ~ c.quando.strftime("%d/%m/%Y %H:%M") ~ "? O estado de agora fica guardado para desfazer.")|tojson }})'>
+<input type="hidden" name="nome" value="{{ c.nome }}"><button class="sec">Voltar para esta</button></form></td>
+{% else %}<td colspan="4" class="mut">arquivo ilegível{% if c.erro %} ({{ c.erro }}){% endif %}</td>{% endif %}</tr>
+{% else %}<tr><td colspan="5" class="mut">Nenhuma cópia ainda: a primeira é feita ao abrir o painel.</td></tr>{% endfor %}
+</table></section>

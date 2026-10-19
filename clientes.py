@@ -35,7 +35,7 @@ def minha_conta() -> str:
     """E-mail da conta Google conectada (para não aparecer como contato do cliente)."""
     if _conta["email"] is None:
         try:
-            _conta["email"] = (g.autenticar() or "").lower()
+            _conta["email"] = (g.autenticar(interativo=False) or "").lower()
         except Exception:
             _conta["email"] = ""
     return _conta["email"]
@@ -263,7 +263,7 @@ def status_sistema(estado_sinc: dict, monitor_ligado: bool) -> list[dict]:
     if not _status["dados"] or time.time() - _status["quando"] > 300:
         itens = []
         try:
-            conta = minha_conta() or g.autenticar()
+            conta = minha_conta() or g.autenticar(interativo=False)
             itens.append({"nome": "Google", "ok": bool(conta), "detalhe": conta or "sem conta"})
         except Exception as e:
             itens.append({"nome": "Google", "ok": False, "detalhe": f"refaça o login ({str(e)[:60]})"})
@@ -290,6 +290,12 @@ def status_sistema(estado_sinc: dict, monitor_ligado: bool) -> list[dict]:
         ultima = estado_sinc.get("ultima")
         itens.append({"nome": "Drive", "ok": not estado_sinc.get("erro"),
                       "detalhe": estado_sinc.get("erro") or (f"sincronizado às {ultima:%H:%M}" if ultima else "aguardando")})
+        agora = datetime.now().astimezone()
+        for pc, quando in sorted((estado_sinc.get("outros_pcs") or {}).items()):
+            horas = (agora - quando).total_seconds() / 3600
+            itens.append({"nome": f"PC {pc}", "ok": horas <= 24 * 3,
+                          "detalhe": "sincronizou há menos de 1 hora" if horas < 1 else
+                          (f"sincronizou há {int(horas)} h" if horas < 48 else f"sem sincronizar há {int(horas // 24)} dias")})
     itens.append({"nome": "Detector do Meet", "ok": monitor_ligado, "detalhe": "ligado" if monitor_ligado else "desligado"})
     import envio
 

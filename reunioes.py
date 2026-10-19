@@ -772,6 +772,12 @@ details>summary{cursor:pointer;list-style:none}
 {% if desatualizado %}<form method="post" action="{{ url_for('reiniciar') }}" class="flash" style="display:flex;gap:12px;align-items:center;justify-content:space-between">
 <span>Há uma versão nova do painel instalada (depois de um <code>git pull</code>). Reinicie para ela valer.</span>
 <button>Reiniciar agora</button></form>{% endif %}
+{% if google_caiu %}<form method="post" action="{{ url_for('google_conectar') }}" class="flash" style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+<span>A conexão com o Google caiu (a autorização venceu ou foi revogada). Agenda, atas e sincronização param até reconectar.</span>
+<button>Reconectar Google</button></form>{% endif %}
+{% for pc, quando in pcs_parados %}<form method="post" action="{{ url_for('esquecer_pc') }}" class="flash" style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+<span>O PC <b>{{ pc }}</b> não sincroniza desde {{ quando.astimezone().strftime('%d/%m às %H:%M') }}. Se ele esteve ligado, a sincronização dele está com problema (veja o painel dele, por exemplo a conexão com o Google).</span>
+<input type="hidden" name="pc" value="{{ pc }}"><button class="sec">Não uso mais esse PC</button></form>{% endfor %}
 {% for m in get_flashed_messages() %}<div class="flash">{{ m }}</div>{% endfor %}
 {{ corpo|safe }}
 </main>
@@ -784,7 +790,8 @@ def pagina(corpo_tpl: str, **ctx):
     corpo = render_template_string(corpo_tpl, **ctx)
     css = (config.BASE_DIR / "telas" / "comum.css").read_text(encoding="utf-8")
     return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR, css_comum=css,
-                                  desatualizado=codigo_mudou())
+                                  desatualizado=codigo_mudou(), google_caiu=bool(g.ESTADO["desconectado"]),
+                                  pcs_parados=sincronia.pcs_parados() if config.SINCRONIZAR else [])
 
 
 # ---------------------------------------------------------------- painel desatualizado (código novo em disco)
@@ -815,7 +822,8 @@ def _ocupado() -> str | None:
 
 
 def copias_de_seguranca() -> None:
-    """Cópia do banco ao abrir (se ainda não houver a do dia) e, com o painel aberto, a cada virada de dia."""
+    """Cópia do banco ao abrir (se ainda não houver a do dia) e, com o painel aberto, a cada virada de dia;
+    as últimas também vão para o Drive."""
     def loop():
         while True:
             try:
@@ -824,6 +832,12 @@ def copias_de_seguranca() -> None:
                     print(f"[copia] {feita.name}")
             except Exception:
                 traceback.print_exc()
+            try:
+                enviadas = sincronia.enviar_copias()  # cópia fora do PC, contra perda do disco
+                if enviadas:
+                    print(f"[copia] {enviadas} cópia(s) enviada(s) ao Drive")
+            except Exception as e:
+                print(f"[copia] não consegui enviar ao Drive (tento de novo em 1 hora): {e}")
             time.sleep(3600)
     threading.Thread(target=loop, daemon=True, name="copias").start()
 
@@ -852,6 +866,77 @@ def reiniciar():
 @app.get("/api/versao")
 def api_versao():
     return {"desatualizado": codigo_mudou()}
+
+
+# ---------------------------------------------------------------- reconectar o Google pelo painel
+
+def _login_google() -> None:
+    login = g.ESTADO["login"]
+    try:
+        login["conta"] = g.reconectar()
+        g.anotar_conexao()
+        clientes._conta["email"] = None  # verificações do painel refeitas com a conta nova
+        clientes._status["quando"] = 0.0
+        sincronia.agendar()
+    except Exception as e:
+        login["erro"] = str(e)[:300]
+    finally:
+        login["rodando"] = False
+
+
+@app.post("/google/conectar")
+def google_conectar():
+    """Abre o login do Google no navegador (o mesmo do comando login) e espera, sem travar o painel."""
+    login = g.ESTADO["login"]
+    if not login["rodando"]:
+        login.update(rodando=True, erro=None, conta=None)
+        threading.Thread(target=_login_google, daemon=True, name="login-google").start()
+    return pagina(
+        "<h1>Reconectar Google</h1><p id='msg'>Abri a tela de login do Google numa aba nova do navegador. "
+        "Escolha a sua conta e autorize; esta página volta sozinha ao painel quando terminar.</p>"
+        "<p class='mut'>Se aparecer \"O Google não verificou este app\", clique em <b>Avançado</b> e depois em "
+        "<b>Acessar</b> (o app é o seu próprio).</p>"
+        "<script>(function t(){fetch('/api/google').then(r=>r.json()).then(j=>{"
+        "if(j.rodando)return setTimeout(t,1500);"
+        "if(j.erro){document.getElementById('msg').textContent='Não conectou: '+j.erro+'. Tente de novo pelo botão.';return}"
+        "location.replace('/')}).catch(()=>setTimeout(t,3000))})()</script>")
+
+
+@app.get("/api/google")
+def api_google():
+    login = g.ESTADO["login"]
+    return {"rodando": login["rodando"], "erro": login["erro"], "conta": login["conta"],
+            "desconectado": bool(g.ESTADO["desconectado"])}
+
+
+@app.get("/copias")
+def copias_tela():
+    return pagina((config.BASE_DIR / "telas" / "copias.html").read_text(encoding="utf-8"), copias=db.copias())
+
+
+@app.post("/copias/voltar")
+def copias_voltar():
+    nome = request.form.get("nome", "")
+    try:
+        voltaram = db.restaurar_copia(nome)
+    except ValueError as e:
+        flash(f"Não voltei: {e}.")
+        return redirect(url_for("copias_tela"))
+    sincronia.agendar()
+    flash(f"Pronto: {voltaram} registro(s) voltaram como estavam na cópia. Para desfazer, volte para a "
+          "cópia “antes de voltar” do topo da lista.")
+    return redirect(url_for("copias_tela"))
+
+
+@app.post("/sincronia/esquecer-pc")
+def esquecer_pc():
+    pc = request.form.get("pc", "")
+    try:
+        if sincronia.esquecer_pc(pc):
+            flash(f"Pronto: o PC {pc} não será mais acompanhado (volta a aparecer se ele sincronizar de novo).")
+    except Exception as e:
+        flash(f"Não consegui tirar o aviso agora: {e}")
+    return redirect(request.referrer or url_for("inicio"))
 
 
 @app.post("/sincronizar")
@@ -886,11 +971,14 @@ def inicio():
         eventos_de_hoje = eventos if semana == 0 else g.listar_eventos(
             datetime.combine(hoje, datetime.min.time(), agora.tzinfo), datetime.combine(hoje + timedelta(days=1), datetime.min.time(), agora.tzinfo))
     except Exception as e:
+        g.anotar_conexao(e)
         return pagina(
             "<h1>Conecte sua conta Google</h1><p>{{ erro }}</p>"
-            "<p>Rode <code>python reunioes.py login</code> no terminal e recarregue esta página.</p>",
+            "<form method='post' action='{{ url_for(\"google_conectar\") }}'><button>Conectar Google</button></form>"
+            "<p class='mut'>Ou rode <code>python reunioes.py login</code> no terminal e recarregue esta página.</p>",
             erro=str(e),
         )
+    g.anotar_conexao()
 
     minhas = db.tarefas(somente_minhas=True)
     clientes_por_id = {c["id"]: c["nome"] for c in db.clientes()}
@@ -1487,7 +1575,8 @@ def resumo(event_id):
 <div class="row"><div><h1>{{ r.titulo }}</h1>
 <p class="mut">{% if inicio %}{{ inicio.strftime('%d/%m às %H:%M') }}{% if faltam is not none and faltam >= 0 %} · começa em {{ faltam }} min{% endif %}{% endif %}
 {% if r.participantes %} · {{ r.participantes|map(attribute='email')|join(', ') }}{% endif %}</p></div>
-<div style="display:flex;gap:8px">{% if r.organizador and not r.ja_terminou %}<a class="btn sec" href="{{ url_for('remarcar_reuniao', event_id=r.id, voltar=request.full_path) }}">Remarcar</a>{% endif %}
+<div style="display:flex;gap:8px">{% if r.organizador and not r.ja_terminou %}<a class="btn sec" href="{{ url_for('remarcar_reuniao', event_id=r.id, voltar=request.full_path) }}">Remarcar</a>
+<form class="inline" method="post" action="{{ url_for('cancelar_reuniao', event_id=r.id, voltar=request.full_path) }}" onsubmit='return confirm({{ ("Cancelar a reunião “" ~ r.titulo ~ "”? Ela sai da agenda e os convidados recebem o cancelamento.")|tojson }})'><button class="sec" title="Cancelar para todos">Cancelar</button></form>{% endif %}
 <a class="btn" href="{{ r.link }}" target="_blank">Entrar no Meet</a></div></div>
 
 <form method="get" class="row" style="justify-content:flex-start;margin:6px 0 4px">
@@ -1793,6 +1882,22 @@ def cliente_renomear(cliente_id):
 extras.registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formulario, _breve)
 
 
+def _trava_do_painel() -> bool:
+    """Trava do Windows (mutex com nome) que só um painel segura: a porta só fica ocupada depois de um ou dois
+    minutos carregando, e dois painéis abertos em sequência ficavam os dois na mesma porta (pedidos travavam)."""
+    if os.name != "nt":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    _trava_do_painel.alca = kernel32.CreateMutexW(None, False, f"Local\\ReunioesPainel{config.PORTA}")
+    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS: outro painel já está aberto (ou subindo)
+        kernel32.CloseHandle(ctypes.c_void_p(_trava_do_painel.alca))
+        return False
+    return True
+
+
 if __name__ == "__main__":
     comando = sys.argv[1] if len(sys.argv) > 1 else "web"
     if comando == "login":
@@ -1805,6 +1910,7 @@ if __name__ == "__main__":
         for _ in range(40 if reiniciado else 1):  # reiniciado: o painel antigo ainda está saindo
             with socket.socket() as s:
                 ja_rodando = s.connect_ex(("127.0.0.1", config.PORTA)) == 0
+            ja_rodando = ja_rodando or not _trava_do_painel()
             if not ja_rodando:
                 break
             time.sleep(0.5)

@@ -186,6 +186,33 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
         return pagina(_tela("remarcar.html"), e=e, voltar=voltar, data=ini.date().isoformat(), hora=ini.strftime("%H:%M"),
                       duracao=duracao_atual, duracoes=duracoes, atual=f"{ini:%d/%m/%Y às %H:%M} ({duracao_atual} min)")
 
+    @app.post("/reuniao/<event_id>/cancelar")
+    def cancelar_reuniao(event_id):
+        """Cancela a reunião para todos: some da agenda e os convidados recebem o cancelamento (pelo Outlook, se o
+        convite saiu por lá; senão, pelo Google)."""
+        voltar = request.values.get("voltar") or url_for("inicio")
+        if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar:
+            voltar = url_for("inicio")
+        e = g.obter_evento(event_id)
+        if not e:
+            flash("Reunião não encontrada no Google Agenda.")
+            return redirect(voltar)
+        if not e["organizador"]:
+            flash("Só quem organizou a reunião pode cancelá-la. Recuse o convite pelo Google Agenda.")
+            return redirect(voltar)
+        try:
+            convite = envio.convite_do_evento(event_id)
+            if convite:  # convite saiu pelo Outlook: o cancelamento vai por ele; o Google não manda outro e-mail
+                envio.cancelar_convite(convite["entry_id"])
+                g.cancelar_evento(event_id, avisar=False)
+            else:
+                g.cancelar_evento(event_id)
+        except Exception as erro:
+            flash(f"Não consegui cancelar: {erro}")
+            return redirect(voltar)
+        flash(f"Reunião “{e['titulo']}” cancelada" + (" e convidados avisados." if e["participantes"] else "."))
+        return redirect(voltar)
+
     # ------------------------------------------------------------ semana e mês
 
     @app.route("/semana")

@@ -5,11 +5,12 @@ não apagada), para que a sincronização pelo Google Drive consiga mesclar o qu
 """
 
 import sqlite3
+import threading
 import unicodedata
 import uuid as _uuid
 from collections import Counter
 from contextlib import closing, contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import config
 
@@ -19,9 +20,20 @@ CAMPOS_TAREFA = ("descricao", "responsavel", "minha", "prazo", "status", "origem
                  "criada_em", "concluida_em", "atualizado_em", "excluido")
 
 
+_ultimo = {"momento": None}
+_trava_relogio = threading.Lock()
+
+
 def agora() -> str:
-    """Momento atual em UTC, com milissegundos (ordena corretamente entre PCs)."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    """Momento atual em UTC, com milissegundos (ordena corretamente entre PCs). Nunca repete neste PC: duas
+    alterações no mesmo milissegundo (ex.: voltar uma cópia) ganham horários diferentes, senão empatariam."""
+    with _trava_relogio:
+        momento = datetime.now(timezone.utc)
+        momento = momento.replace(microsecond=momento.microsecond // 1000 * 1000)
+        if _ultimo["momento"] is not None and momento <= _ultimo["momento"]:
+            momento = _ultimo["momento"] + timedelta(milliseconds=1)
+        _ultimo["momento"] = momento
+    return momento.isoformat(timespec="milliseconds")
 
 
 @contextmanager
@@ -110,21 +122,110 @@ def criar_tabelas() -> None:
         _unificar_pessoas(con)
 
 
-def copia_de_seguranca(manter: int = 14):
-    """Uma cópia do banco por dia em copias/ (as últimas `manter`). Protege contra uma sincronia ruim,
-    que chegaria também ao Drive. Usa a cópia do próprio SQLite: vale mesmo com o painel gravando."""
-    pasta = ARQUIVO.parent / "copias"
-    destino = pasta / f"dados-{date.today().isoformat()}.db"
-    if destino.exists() or not ARQUIVO.exists():
-        return None
-    pasta.mkdir(exist_ok=True)
+def _pasta_copias():
+    return ARQUIVO.parent / "copias"
+
+
+def _copiar_banco(destino) -> None:
+    """Cópia do próprio SQLite (vale mesmo com o painel gravando); só aparece com o nome final quando completa."""
+    destino.parent.mkdir(exist_ok=True)
     provisorio = destino.with_suffix(".tmp")
     with closing(sqlite3.connect(ARQUIVO)) as origem, closing(sqlite3.connect(provisorio)) as copia:
         origem.backup(copia)
-    provisorio.replace(destino)  # só aparece como cópia do dia depois de completa
+    provisorio.replace(destino)
+
+
+def copia_de_seguranca(manter: int = 14):
+    """Uma cópia do banco por dia em copias/ (as últimas `manter`). Protege contra uma sincronia ruim,
+    que chegaria também ao Drive."""
+    pasta = _pasta_copias()
+    destino = pasta / f"dados-{date.today().isoformat()}.db"
+    if destino.exists() or not ARQUIVO.exists():
+        return None
+    _copiar_banco(destino)
     for velha in sorted(pasta.glob("dados-*.db"))[:-manter]:
         velha.unlink(missing_ok=True)
     return destino
+
+
+def _abrir_copia(arquivo):
+    """Conexão só de leitura a uma cópia (abrir não pode alterar a cópia nem criar arquivo)."""
+    from urllib.parse import quote
+
+    con = sqlite3.connect(f"file:{quote(arquivo.resolve().as_posix(), safe='/:')}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def copias() -> list[dict]:
+    """Cópias de segurança deste PC, da mais nova para a mais velha, com o que cada uma guarda."""
+    lista = []
+    for arq in _pasta_copias().glob("*.db"):
+        if not (arq.name.startswith("dados-") or arq.name.startswith("antes-de-voltar-")) or not arq.is_file():
+            continue
+        item = {"nome": arq.name, "quando": datetime.fromtimestamp(arq.stat().st_mtime),
+                "antes_de_voltar": arq.name.startswith("antes-de-voltar-"), "legivel": False}
+        try:
+            with closing(_abrir_copia(arq)) as con:
+                conta = lambda sql: con.execute(sql).fetchone()[0]  # noqa: E731
+                item.update(clientes=conta("SELECT COUNT(*) FROM clientes WHERE excluido = 0"),
+                            tarefas=conta("SELECT COUNT(*) FROM tarefas WHERE excluido = 0 AND status != 'feito'"),
+                            notas=conta("SELECT COUNT(*) FROM notas WHERE excluido = 0"), legivel=True)
+        except sqlite3.Error as e:  # arquivo estragado ou de outra coisa: aparece, mas não dá para voltar para ele
+            item["erro"] = str(e)[:120]
+        lista.append(item)
+    return sorted(lista, key=lambda c: (c["quando"], c["nome"]), reverse=True)
+
+
+def _sem_data(registro: dict) -> dict:
+    return {k: v for k, v in registro.items() if k != "atualizado_em"}
+
+
+def restaurar_copia(nome) -> int:
+    """Volta clientes, tarefas, anotações e pessoas ao que eram na cópia `nome`: o que mudou ou foi excluído
+    depois dela volta como estava (com data de agora, para valer também nos outros PCs na sincronia); o que
+    foi criado depois continua. Antes, guarda o estado atual em copias/antes-de-voltar-..., para desfazer.
+    Devolve quantos registros voltaram."""
+    if not isinstance(nome, str) or nome not in {c["nome"] for c in copias() if c["legivel"]}:
+        raise ValueError("cópia não encontrada")
+    try:
+        with closing(_abrir_copia(_pasta_copias() / nome)) as con:
+            antiga = _exportar(con)
+    except sqlite3.Error as e:
+        raise ValueError(f"não consegui ler a cópia ({e})") from e
+    pasta = _pasta_copias()
+    _copiar_banco(pasta / f"antes-de-voltar-{datetime.now():%Y-%m-%d-%H%M%S}.db")
+    for velha in sorted(pasta.glob("antes-de-voltar-*.db"))[:-5]:
+        velha.unlink(missing_ok=True)
+    with conexao() as con:
+        atual = _exportar(con)
+        canon = {c["uuid"]: _canonico(con, c["uuid"]) for c in antiga["clientes"]}
+        canon.update({r["cliente_uuid"]: _canonico(con, r["cliente_uuid"])
+                      for k in ("tarefas", "notas", "pessoas") for r in antiga[k] if r["cliente_uuid"]})
+    voltar = {"apelidos": antiga["apelidos"]}
+    for chave in ("clientes", "tarefas", "notas", "pessoas"):
+        hoje = {r["uuid"]: r for r in atual[chave]}
+        voltar[chave] = []
+        for r in antiga[chave]:
+            if chave == "clientes" and canon[r["uuid"]] != r["uuid"]:
+                continue  # unido a outro cliente depois da cópia: a união fica (o que ficou é tratado abaixo)
+            if r.get("cliente_uuid"):
+                r = {**r, "cliente_uuid": canon[r["cliente_uuid"]]}
+            if r["uuid"] not in hoje or _sem_data(hoje[r["uuid"]]) != _sem_data(r):
+                # cada um com o seu horário, como numa alteração normal (horários iguais em clientes diferentes
+                # deixariam a escolha da versão mais recente depender da ordem)
+                voltar[chave].append({**r, "atualizado_em": agora()})
+    mesclar(voltar)
+    # cliente vivo na cópia tem de terminar num cliente vivo, mesmo que depois da cópia tenha sido unido a outro e
+    # a mesclagem acima (nomes iguais, versão excluída mais nova) tenha juntado tudo num excluído
+    with conexao() as con:
+        for c in antiga["clientes"]:
+            if not c["excluido"]:
+                final = _canonico(con, c["uuid"])
+                if con.execute("UPDATE clientes SET excluido = 0, atualizado_em = ? WHERE uuid = ? AND excluido = 1",
+                               (agora(), final)).rowcount:
+                    voltar["clientes"].append(c)  # entra na contagem do que voltou
+    return sum(len(voltar[k]) for k in ("clientes", "tarefas", "notas", "pessoas"))
 
 
 # ---------------------------------------------------------------- validação
@@ -497,7 +598,12 @@ def _canonico(con, cliente_uuid):
 
 
 def _mais_recente(a: dict, b: dict) -> dict:
-    return a if ((a.get("atualizado_em") or ""), a["uuid"]) >= ((b.get("atualizado_em") or ""), b["uuid"]) else b
+    """A versão mais recente; no empate de data (e de uuid), o próprio conteúdo decide, para os dois PCs
+    escolherem a mesma (senão cada um fica com a sua e nunca convergem)."""
+    def ordem(c):
+        return (c.get("atualizado_em") or "", c["uuid"], str(c.get("nome") or ""), str(c.get("emails") or ""),
+                int(c.get("excluido") or 0))
+    return a if ordem(a) >= ordem(b) else b
 
 
 def _apelidar(con, uuid_antigo: str, canonico: str) -> None:
@@ -585,18 +691,22 @@ def _mesclar_clientes(con, remotos: list[dict]) -> int:
 def exportar() -> dict:
     """Tudo (inclusive excluídos), com o cliente referenciado pelo uuid — igual em todos os PCs."""
     with conexao() as con:
-        cli = [dict(r) for r in con.execute(
-            "SELECT uuid, nome, emails, criado_em, atualizado_em, excluido FROM clientes ORDER BY uuid")]
-        tar = [dict(r) for r in con.execute(
-            f"SELECT t.uuid, c.uuid AS cliente_uuid, {', '.join('t.' + c for c in CAMPOS_TAREFA)} "
-            "FROM tarefas t LEFT JOIN clientes c ON c.id = t.cliente_id ORDER BY t.uuid")]
-        nts = [dict(r) for r in con.execute(
-            "SELECT n.uuid, c.uuid AS cliente_uuid, n.texto, n.criado_em, n.atualizado_em, n.excluido "
-            "FROM notas n LEFT JOIN clientes c ON c.id = n.cliente_id ORDER BY n.uuid")]
-        pes = [dict(r) for r in con.execute(
-            "SELECT p.uuid, c.uuid AS cliente_uuid, p.nome, p.criado_em, p.atualizado_em, p.excluido "
-            "FROM pessoas p LEFT JOIN clientes c ON c.id = p.cliente_id ORDER BY p.uuid")]
-        apelidos = [dict(r) for r in con.execute("SELECT uuid, para FROM clientes_alias ORDER BY uuid")]
+        return _exportar(con)
+
+
+def _exportar(con) -> dict:
+    cli = [dict(r) for r in con.execute(
+        "SELECT uuid, nome, emails, criado_em, atualizado_em, excluido FROM clientes ORDER BY uuid")]
+    tar = [dict(r) for r in con.execute(
+        f"SELECT t.uuid, c.uuid AS cliente_uuid, {', '.join('t.' + c for c in CAMPOS_TAREFA)} "
+        "FROM tarefas t LEFT JOIN clientes c ON c.id = t.cliente_id ORDER BY t.uuid")]
+    nts = [dict(r) for r in con.execute(
+        "SELECT n.uuid, c.uuid AS cliente_uuid, n.texto, n.criado_em, n.atualizado_em, n.excluido "
+        "FROM notas n LEFT JOIN clientes c ON c.id = n.cliente_id ORDER BY n.uuid")]
+    pes = [dict(r) for r in con.execute(
+        "SELECT p.uuid, c.uuid AS cliente_uuid, p.nome, p.criado_em, p.atualizado_em, p.excluido "
+        "FROM pessoas p LEFT JOIN clientes c ON c.id = p.cliente_id ORDER BY p.uuid")]
+    apelidos = [dict(r) for r in con.execute("SELECT uuid, para FROM clientes_alias ORDER BY uuid")]
     return {"clientes": cli, "tarefas": tar, "notas": nts, "pessoas": pes, "apelidos": apelidos}
 
 
@@ -725,9 +835,8 @@ def mesclar(remoto: dict) -> int:
             cid = id_local(p.get("cliente_uuid"))
             local = con.execute("SELECT atualizado_em FROM pessoas WHERE uuid = ?", (p["uuid"],)).fetchone()
             if not local:
-                # a mesma pessoa criada nos dois PCs (mesmo cliente e nome) fica uma só
-                if _pessoa_no_cliente(con, cid, nome):
-                    continue
+                # entra sempre (senão os PCs ficam com conjuntos diferentes: um com a pessoa viva, outro só com uma
+                # excluída de mesmo nome); a mesma pessoa duas vezes no cliente vira uma só em _unificar_pessoas
                 con.execute("INSERT INTO pessoas (uuid, cliente_id, nome, criado_em, atualizado_em, excluido) "
                             "VALUES (?, ?, ?, ?, ?, ?)", (p["uuid"], cid, nome, p.get("criado_em") or agora(),
                                                            p.get("atualizado_em") or "", int(bool(p.get("excluido")))))

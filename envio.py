@@ -220,6 +220,24 @@ def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo:
     _vigiar("atualização de convite", remetente, assunto, para)
 
 
+def cancelar_convite(entry_id: str) -> None:
+    """Cancela uma reunião cujo convite saiu pelo Outlook: manda o cancelamento aos convidados e tira do calendário."""
+    _liberado()
+
+    def cancelar(ol):
+        item = ol.GetNamespace("MAPI").GetItemFromID(entry_id)
+        item.MeetingStatus = 5  # olMeetingCanceled
+        item.Save()
+        item.Send()
+        conta = item.SendUsingAccount
+        dados = (conta.SmtpAddress if conta else remetente_padrao()), item.Subject, [r.Address for r in item.Recipients]
+        item.Delete()
+        return dados
+
+    remetente, assunto, para = _no_outlook(cancelar)
+    _vigiar("cancelamento de convite", remetente, assunto, para)
+
+
 # ---------------------------------------------------------------- conferência: a mensagem saiu da Caixa de Saída?
 
 ENVIOS = []  # [{id, tipo, remetente, assunto, para, momento, estado}] — estado: conferindo | enviado | preso | dispensado

@@ -18,6 +18,37 @@ from googleapiclient.http import MediaInMemoryUpload
 import config
 
 _locais = threading.local()  # um conjunto de serviços por thread
+_geracao = [0]  # muda a cada novo login: os serviços guardados em cada thread passam a usar a autorização nova
+_entrando = threading.Lock()  # um login no navegador por vez
+# desconectado: motivo, quando a autorização do Google venceu ou foi revogada (o painel mostra "Reconectar")
+# login: o login aberto pelo botão do painel (rodando, erro, conta)
+ESTADO = {"desconectado": None, "login": {"rodando": False, "erro": None, "conta": None}}
+
+
+def autorizacao_vencida(erro: BaseException) -> bool:
+    """O erro é de autorização vencida/revogada (resolve com um novo login), e não de rede ou outro."""
+    return isinstance(erro, RefreshError) or "invalid_grant" in str(erro)
+
+
+def anotar_conexao(erro: BaseException | None = None) -> None:
+    """Uma chamada ao Google deu certo (erro=None) ou falhou: liga/desliga o aviso de reconectar."""
+    if erro is None:
+        ESTADO["desconectado"] = None
+    elif autorizacao_vencida(erro):
+        ESTADO["desconectado"] = str(erro)[:200]
+
+
+def _login_no_navegador(espera_s: int | None = None) -> Credentials:
+    if not config.CREDENTIALS_FILE.exists():
+        raise RuntimeError(
+            "Arquivo credentials.json não encontrado. Veja o passo 'Google Cloud' no README.md."
+        )
+    flow = InstalledAppFlow.from_client_secrets_file(str(config.CREDENTIALS_FILE), config.GOOGLE_SCOPES)
+    return flow.run_local_server(port=0, prompt="consent", timeout_seconds=espera_s)
+
+
+def _guardar(creds: Credentials) -> None:
+    config.TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
 
 
 def _credentials(entrar_de_novo: bool = False) -> Credentials:
@@ -31,18 +62,14 @@ def _credentials(entrar_de_novo: bool = False) -> Credentials:
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-        except RefreshError:
+        except RefreshError as e:
             if not entrar_de_novo:
+                anotar_conexao(e)
                 raise
             creds = None
     if not (creds and creds.valid):
-        if not config.CREDENTIALS_FILE.exists():
-            raise RuntimeError(
-                "Arquivo credentials.json não encontrado. Veja o passo 'Google Cloud' no README.md."
-            )
-        flow = InstalledAppFlow.from_client_secrets_file(str(config.CREDENTIALS_FILE), config.GOOGLE_SCOPES)
-        creds = flow.run_local_server(port=0, prompt="consent")
-    config.TOKEN_FILE.write_text(creds.to_json(), encoding="utf-8")
+        creds = _login_no_navegador()
+    _guardar(creds)
     return creds
 
 
@@ -50,8 +77,9 @@ def _svc(name: str, version: str):
     """Serviço do Google para a thread atual. A biblioteca (httplib2) não aceita a mesma conexão usada por
     várias threads ao mesmo tempo (dá erro de SSL); painel, lembretes e sincronização rodam em paralelo."""
     servicos = getattr(_locais, "servicos", None)
-    if servicos is None:
+    if servicos is None or getattr(_locais, "geracao", None) != _geracao[0]:
         servicos = _locais.servicos = {}
+        _locais.geracao = _geracao[0]
     if name not in servicos:
         creds = _credentials()
         try:
@@ -62,12 +90,35 @@ def _svc(name: str, version: str):
     return servicos[name]
 
 
-def autenticar() -> str:
-    """Força o login e devolve o e-mail da conta conectada."""
-    _credentials(entrar_de_novo=True)
+def autenticar(interativo: bool = True) -> str:
+    """E-mail da conta conectada. Interativo (comando login): autorização vencida abre o login no navegador.
+    Sem ele (verificações do painel), só usa a autorização salva e dá erro se ela não vale mais."""
+    _credentials(entrar_de_novo=interativo)
     # events.list é coberto pelo escopo calendar.events; o "summary" da agenda principal é o e-mail
     info = _svc("calendar", "v3").events().list(calendarId="primary", maxResults=1).execute()
+    anotar_conexao()
     return info.get("summary", "")
+
+
+def reconectar(espera_s: int = 300) -> str:
+    """Botão "Reconectar Google" do painel: abre o login no navegador, guarda a autorização nova e devolve a
+    conta. Se ninguém concluir o login em `espera_s` segundos, desiste (não fica preso para sempre)."""
+    if not _entrando.acquire(blocking=False):
+        raise RuntimeError("já há um login do Google aberto no navegador; conclua aquele")
+    try:
+        try:
+            creds = _login_no_navegador(espera_s)
+        except RuntimeError:
+            raise
+        except Exception as e:  # tempo esgotado, janela fechada, recusa na tela do Google
+            raise RuntimeError(f"o login não foi concluído ({str(e)[:80] or type(e).__name__})") from e
+        if not (creds and creds.valid):
+            raise RuntimeError("o Google não devolveu uma autorização válida")
+        _guardar(creds)
+        _geracao[0] += 1
+        return autenticar(interativo=False)
+    finally:
+        _entrando.release()
 
 
 # ---------------------------------------------------------------- Agenda
@@ -195,6 +246,12 @@ def remarcar_evento(event_id: str, inicio: datetime, duracao_min: int, titulo: s
     ev = (_svc("calendar", "v3").events()
           .patch(calendarId="primary", eventId=event_id, body=corpo, sendUpdates="all" if avisar else "none").execute())
     return {"link_evento": ev.get("htmlLink"), "link_meet": ev.get("hangoutLink")}
+
+
+def cancelar_evento(event_id: str, avisar: bool = True) -> None:
+    """Cancela (apaga) o evento da agenda; com avisar, o Google manda o cancelamento aos convidados."""
+    (_svc("calendar", "v3").events()
+     .delete(calendarId="primary", eventId=event_id, sendUpdates="all" if avisar else "none").execute())
 
 
 # ---------------------------------------------------------------- Transcrição
