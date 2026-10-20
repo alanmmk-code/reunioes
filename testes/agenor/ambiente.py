@@ -198,7 +198,21 @@ LIXEIRA = []
 g.drive_lixeira = lambda fid: LIXEIRA.append(fid)
 g.buscar_transcricao = lambda r: ("texto da transcricao", "falso")
 g.enviar_email = lambda dest, assunto, html: EMAILS.append(dest)
-g.agendar_followup = lambda *a, **k: {"link_evento": "https://x", "link_meet": "https://y"}
+AGENDADOS = []  # (args, kwargs) de cada agendar_followup
+g.agendar_followup = lambda *a, **k: (AGENDADOS.append((a, k)), {"link_evento": "https://x", "link_meet": "https://y"})[1]
+INCLUIDOS = []  # (event_id, emails, avisar) de cada incluir_convidados
+
+
+def _incluir_convidados(event_id, emails, avisar=True):
+    e = next((x for x in EVENTOS if x["id"] == event_id), None)
+    if not e:
+        raise RuntimeError("evento nao existe")
+    INCLUIDOS.append((event_id, list(emails), avisar))
+    ja = {p["email"].lower() for p in e["participantes"]}
+    return [x for x in dict.fromkeys(emails) if x.lower() not in ja]  # como o real; a agenda falsa fica igual
+
+
+g.incluir_convidados = _incluir_convidados
 
 
 GANCHO_ATA = {"fn": None}  # chamado dentro do gerar_ata falso (a acao de cancelar aperta o botao ali, como no meio do Claude)
@@ -242,8 +256,11 @@ sincronia.PC = "PC-TESTE"  # o nome de verdade do PC nao entra em semente (o rep
 reunioes.sincronia = sincronia
 PROCESSAR_GRAVACAO_REAL = reunioes._processar_gravacao  # a acao "cancelar a criacao da ata" roda o de verdade, em linha
 PROCESSAR_TEXTO_REAL = reunioes.processar_texto
-reunioes.processar_gravacao = lambda *a, **k: None
-reunioes.processar_texto = lambda *a, **k: None
+PROCESSAR_GRAVACAO_FILA_REAL = reunioes.processar_gravacao  # com `item` e a trava: a acao da fila roda os de verdade, em linha
+PROCESSAR_TEXTO_FILA_REAL = reunioes.processar_texto
+WORKERS = []  # o que as rotas teriam posto em threads: ("gravacao"|"texto", args); a acao da fila roda estes em sequencia
+reunioes.processar_gravacao = lambda *a, **k: WORKERS.append(("gravacao", a))
+reunioes.processar_texto = lambda *a, **k: WORKERS.append(("texto", a))
 reunioes._encerrar_processo = lambda: None  # /reiniciar nunca derruba o teste (e o Popen ja e bloqueado)
 reunioes.app.testing = True
 reunioes.app.config["PROPAGATE_EXCEPTIONS"] = True
@@ -282,11 +299,16 @@ def novo_mundo(semente):
     CANCELADOS.clear()
     DOCS_ATUALIZADOS.clear()
     LIXEIRA.clear()
+    AGENDADOS.clear()
+    INCLUIDOS.clear()
     LOGINS.clear()
     g.ESTADO["desconectado"] = None
     g.ESTADO["login"].update(rodando=False, erro=None, conta=None)
     sincronia.ESTADO["outros_pcs"] = {}
-    reunioes.TAREFA.update(ativa=False, etapa="", pct=0, erro=None, event_id=None, cancelavel=False, cancelada=False)
+    reunioes.TAREFA.update(ativa=False, etapa="", pct=0, erro=None, event_id=None, cancelavel=False, cancelada=False,
+                           etapa_desde=0.0)
+    reunioes.FILA.clear()
+    WORKERS.clear()
     reunioes.CANCELAR_ATA.clear()
     ia.cancelavel(None)
     GANCHO_ATA["fn"] = None

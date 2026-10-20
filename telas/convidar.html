@@ -1,0 +1,10 @@
+<h1>Convidar mais pessoas</h1>
+<p class="mut">Inclui pessoas em <b>{{ e.titulo }}</b> sem remarcar nem cancelar. Só as pessoas novas recebem o convite.</p>
+<form method="post" class="card" data-espera="Enviando convite…" style="display:grid;gap:10px">
+<input type="hidden" name="voltar" value="{{ voltar }}">
+<label class="mut">E-mails das pessoas novas (separe por vírgula)
+<textarea name="convidados" rows="3" placeholder="fulano@empresa.com.br, ciclana@empresa.com.br" required>{{ texto }}</textarea></label>
+<p class="mut" style="margin:0">{{ e.inicio[:16].replace('T', ' às ') }}{% if e.participantes %} · já convidados: {{ e.participantes|join(', ') }}{% else %} · ainda sem convidados{% endif %}</p>
+<div class="row" style="justify-content:flex-start;gap:8px"><button>Enviar convite</button>
+<a class="btn sec" href="{{ voltar }}">Voltar</a></div>
+</form>

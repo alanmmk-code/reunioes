@@ -248,6 +248,20 @@ def remarcar_evento(event_id: str, inicio: datetime, duracao_min: int, titulo: s
     return {"link_evento": ev.get("htmlLink"), "link_meet": ev.get("hangoutLink")}
 
 
+def incluir_convidados(event_id: str, emails: list[str], avisar: bool = True) -> list[str]:
+    """Acrescenta convidados ao evento sem mexer nos que já estão (nem nas respostas deles).
+    Devolve os que eram de fato novos."""
+    eventos = _svc("calendar", "v3").events()
+    ev = eventos.get(calendarId="primary", eventId=event_id).execute()
+    atuais = ev.get("attendees", [])
+    ja = {(a.get("email") or "").lower() for a in atuais}
+    novos = [e for e in dict.fromkeys(emails) if e.lower() not in ja]
+    if novos:
+        eventos.patch(calendarId="primary", eventId=event_id, body={"attendees": atuais + [{"email": e} for e in novos]},
+                      sendUpdates="all" if avisar else "none").execute()
+    return novos
+
+
 def cancelar_evento(event_id: str, avisar: bool = True) -> None:
     """Cancela (apaga) o evento da agenda; com avisar, o Google manda o cancelamento aos convidados."""
     (_svc("calendar", "v3").events()

@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import time
+import unicodedata
 from datetime import date, datetime, timedelta
 
 from pydantic import BaseModel, Field
@@ -92,10 +93,47 @@ def _reunioes_passadas(dias=180) -> list[dict]:
     return _historico["eventos"]
 
 
+def clientes_das_reunioes(eventos) -> dict:
+    """{event_id: cliente_id} de cada reunião: o cliente da ata, quando há ata; senão o cliente com mais
+    participantes cadastrados (e-mail exato vale mais que domínio); no empate ou sem ninguém, o nome no título."""
+    cadastro = [(c["id"], c["nome"], {e.strip().lower() for e in (c.get("emails") or "").split(",") if e.strip()})
+                for c in db.clientes()]
+    resultado = {}
+    for ev in eventos:
+        if not ev.get("id"):  # sem id não dá para guardar a atribuição (id-less colidiriam na mesma chave)
+            continue
+        reg = atas.carregar(ev["id"])
+        if reg and reg.get("cliente_id"):
+            resultado[ev["id"]] = reg["cliente_id"]
+            continue
+        votos = {}
+        for p in ev.get("participantes") or []:
+            m = (p.get("email") or "").lower()
+            if "@" not in m:
+                continue
+            for cid, _, cadastrados in cadastro:
+                if m in cadastrados:
+                    votos[cid] = votos.get(cid, 0) + 2
+                elif "@" + m.split("@", 1)[1] in cadastrados:
+                    votos[cid] = votos.get(cid, 0) + 1
+        maior = max(votos.values(), default=0)
+        candidatos = [cid for cid, v in votos.items() if v == maior] if maior else [c[0] for c in cadastro]
+        titulo = unicodedata.normalize("NFC", ev.get("titulo") or "").casefold()
+        # "Reunião Camisetaria - Linx": vale o cliente citado primeiro
+        no_titulo = sorted((titulo.find(unicodedata.normalize("NFC", nome).casefold()), cid) for cid, nome, _ in cadastro
+                           if cid in candidatos and unicodedata.normalize("NFC", nome).casefold() in titulo)
+        if no_titulo and (len(no_titulo) == 1 or no_titulo[0][0] < no_titulo[1][0]):
+            resultado[ev.get("id")] = no_titulo[0][1]
+        elif maior and len(candidatos) == 1:
+            resultado[ev.get("id")] = candidatos[0]
+    return resultado
+
+
 def sugerir_convidados(emails, cliente_id=None, eventos=None, eu=None) -> dict:
     """Quem costuma estar nas reuniões com estas pessoas (ou com o cliente), para marcar em vez de digitar.
 
-    Reunião relacionada = teve alguém de `emails`, alguém do mesmo domínio de empresa ou um contato do cliente.
+    Com cliente: só as reuniões desse cliente (quem atende vários clientes não traz a turma dos outros).
+    Sem cliente: reunião relacionada = teve alguém de `emails` ou alguém do mesmo domínio de empresa.
     Devolve {"pessoas": [{email, nome, reunioes, ultima}], "ultima": {titulo, data, emails} | None}; "ultima" é a
     turma da reunião relacionada mais recente (atalho "mesmas pessoas da última")."""
     eu = (minha_conta() if eu is None else eu).lower()
@@ -105,13 +143,18 @@ def sugerir_convidados(emails, cliente_id=None, eventos=None, eu=None) -> dict:
     do_cliente = set()
     if cliente_id:
         do_cliente = {p["email"] for p in contatos(cliente_id)}
-        c = db.cliente(cliente_id) or {}
-        dominios |= {e.strip().lstrip("@").lower() for e in (c.get("emails") or "").split(",") if e.strip().startswith("@")}
     pessoas, ultima = {}, None
-    for ev in sorted(eventos if eventos is not None else _reunioes_passadas(), key=lambda e: e.get("inicio") or ""):
+    eventos = eventos if eventos is not None else _reunioes_passadas()
+    do_evento = clientes_das_reunioes(eventos) if cliente_id else {}
+    for ev in sorted(eventos, key=lambda e: e.get("inicio") or ""):
         part = [p for p in ev.get("participantes") or [] if "@" in (p.get("email") or "")]
         mails = {p["email"].lower() for p in part if not p["email"].lower().endswith("calendar.google.com")} - {eu}
-        if not mails or not (mails & (digitados | do_cliente) or any(m.split("@")[1] in dominios for m in mails)):
+        if not mails:
+            continue
+        if cliente_id:
+            if do_evento.get(ev.get("id")) != cliente_id:
+                continue
+        elif not (mails & digitados or any(m.split("@")[1] in dominios for m in mails)):
             continue
         data = (ev.get("inicio") or "")[:10]
         ultima = {"titulo": ev.get("titulo", ""), "data": data, "emails": sorted(mails)}

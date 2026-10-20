@@ -73,11 +73,15 @@ a.stat:hover{border-color:var(--pri)}
 {% if gravando %}<div class="alerta rec"><b>● Gravando agora{% if titulo_gravacao %}: {{ titulo_gravacao }}{% endif %}</b>
 <span><form class="inline" method="post" action="/api/janela/abrir"><input type="hidden" name="x" value="1"><button class="sec">Mostrar janela</button></form>
 <a class="btn" href="{{ url_for('gravacao') }}">Acompanhar</a></span></div>
-{% elif tarefa.ativa %}<div class="alerta pend"><b>⏳ Gerando ata: {{ tarefa.etapa }}{% if tarefa.etapa.startswith('Transcrevendo') %} ({{ tarefa.pct }}%){% endif %}</b>
+{% elif tarefa.ativa %}<div class="alerta pend"><b>⏳ Gerando ata{% if tarefa.titulo %} ({{ tarefa.titulo }}){% endif %}: {{ tarefa.etapa }}{% if tarefa.etapa.startswith('Transcrevendo') %} ({{ tarefa.pct }}%){% elif tarefa.etapa.startswith('Escrevendo') and tarefa.ha %} · {{ tarefa.ha }}{% endif %}</b>
 <span style="display:flex;gap:6px"><a class="btn sec" href="{{ url_for('gravacao') }}">Acompanhar</a>
 {% if tarefa.cancelavel and tarefa.etapa != 'Cancelando' %}<form class="inline" method="post" action="{{ url_for('cancelar_ata') }}"
 onsubmit="return confirm('Cancelar a criação da ata? A gravação fica guardada para você gerar depois.')"><input type="hidden" name="voltar" value="/">
 <button class="sec" style="color:var(--err)">Cancelar</button></form>{% endif %}</span></div>{% endif %}
+{% for i in tarefa.fila %}<div class="alerta pend"><b>Na fila para gerar a ata: {{ i.titulo or 'Reunião' }}</b>
+<form class="inline" method="post" action="{{ url_for('cancelar_ata') }}"
+onsubmit="return confirm('Tirar da fila? A gravação fica guardada para você gerar depois.')"><input type="hidden" name="voltar" value="/">
+<input type="hidden" name="chave" value="{{ i.chave }}"><button class="sec" style="color:var(--err)">Tirar da fila</button></form></div>{% endfor %}
 {% for e in presos %}<div class="alerta rec"><b>{{ e.tipo|capitalize }} preso no Outlook ({{ e.remetente }}): "{{ e.assunto }}" para {{ e.para|join(', ') }} — enviado às {{ e.momento }}.
 Abra o Outlook e aperte F9 (Enviar/Receber).</b>
 <span style="display:flex;gap:6px"><form class="inline" method="post" action="{{ url_for('envio_acao', envio_id=e.id, acao='conferir') }}"><button class="sec">Conferir de novo</button></form>
@@ -122,6 +126,7 @@ Abra o Outlook e aperte F9 (Enviar/Receber).</b>
   {% else %}
     <a class="btn sec" href="{{ url_for('resumo', event_id=e.id) }}">Resumo</a>
     {% if e.organizador %}<a class="btn sec" href="{{ url_for('remarcar_reuniao', event_id=e.id, voltar=request.full_path) }}" title="Mudar data e horário">Remarcar</a>
+<a class="btn sec" href="{{ url_for('convidar_reuniao', event_id=e.id, voltar=request.full_path) }}" title="Incluir pessoas; só elas recebem o convite">Convidar</a>
 <form class="inline" method="post" action="{{ url_for('cancelar_reuniao', event_id=e.id, voltar=request.full_path) }}" onsubmit='return confirm({{ ("Cancelar a reunião “" ~ e.titulo ~ "”? Ela sai da agenda e os convidados recebem o cancelamento.")|tojson }})'><button class="sec" title="Cancelar para todos">Cancelar</button></form>{% endif %}
     {% if not gravando %}<form class="inline" method="post" action="{{ url_for('gravar', event_id=e.id) }}" onsubmit="window.open('{{ e.link }}','_blank')"><button>Entrar e gravar</button></form>
     {% else %}<a class="btn" href="{{ e.link }}" target="_blank">Entrar</a>{% endif %}

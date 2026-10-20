@@ -3,6 +3,7 @@
 Registradas no app do painel por `registrar(...)`, chamado no fim de reunioes.py.
 """
 
+import re
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -16,6 +17,10 @@ import google_services as g
 import service_desk
 
 TELAS = config.BASE_DIR / "telas"
+
+
+_EMAIL = re.compile(r"[^@\s,;<>\"]+@[^@\s,;<>\"]+\.[^@\s,;<>\"]+")
+DURACOES = (15, 30, 45, 60, 90, 120, 150, 180, 240, 300, 360, 480)  # opções de duração ao marcar/remarcar
 
 
 def _tela(nome: str) -> str:
@@ -114,7 +119,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             try:
                 inicio = datetime.fromisoformat(f"{request.form['data']}T{request.form['hora']}")
                 convidados = [e.strip() for e in request.form.get("convidados", "").replace(";", ",").split(",") if "@" in e]
-                titulo, duracao = request.form["titulo"].strip() or "Reunião", int(request.form.get("duracao", 30))
+                titulo, duracao = request.form["titulo"].strip() or "Reunião", max(5, min(int(request.form.get("duracao", 30)), 24 * 60))
                 pauta = request.form.get("pauta", "").strip()
                 # evento (com Meet) no Google Agenda sem e-mail do Google; o convite sai pelo Outlook
                 criado = g.agendar_followup(titulo, inicio, duracao, convidados, pauta, enviar_convites=False)
@@ -147,7 +152,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             convidados = ", ".join(ultima["emails"] if ultima else (p["email"] for p in clientes.contatos(cliente_id)))
         amanha = date.today() + timedelta(days=1)
         return pagina(_tela("nova_reuniao.html"), c=c, clientes=db.clientes(), pauta=pauta, convidados=convidados,
-                      data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "")
+                      data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "", duracoes=DURACOES)
 
     @app.get("/reuniao/sugestoes")
     def sugestoes_convidados():
@@ -199,7 +204,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                 flash("Data ou hora inválida.")
             except Exception as erro:
                 flash(f"Não consegui remarcar: {erro}")
-        duracoes = sorted({15, 30, 45, 60, 90, 120, duracao_atual})
+        duracoes = sorted({*DURACOES, duracao_atual})
         return pagina(_tela("remarcar.html"), e=e, voltar=voltar, data=ini.date().isoformat(), hora=ini.strftime("%H:%M"),
                       duracao=duracao_atual, duracoes=duracoes, atual=f"{ini:%d/%m/%Y às %H:%M} ({duracao_atual} min)")
 
@@ -229,6 +234,45 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             return redirect(voltar)
         flash(f"Reunião “{e['titulo']}” cancelada" + (" e convidados avisados." if e["participantes"] else "."))
         return redirect(voltar)
+
+    @app.route("/reuniao/<event_id>/convidar", methods=["GET", "POST"])
+    def convidar_reuniao(event_id):
+        """Inclui pessoas numa reunião já marcada; só as novas recebem o convite."""
+        voltar = request.values.get("voltar") or url_for("inicio")
+        if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar or not voltar.isprintable():
+            voltar = url_for("inicio")
+        e = g.obter_evento(event_id)
+        if not e:
+            flash("Reunião não encontrada no Google Agenda.")
+            return redirect(voltar)
+        if not e["organizador"]:
+            flash("Só quem organizou a reunião pode convidar mais pessoas. Peça ao organizador.")
+            return redirect(voltar)
+        texto = request.form.get("convidados", "")
+        if request.method == "POST":
+            bruto = [x.strip() for x in texto.replace(";", ",").replace("\n", ",").split(",") if x.strip()]
+            emails = list({x.lower(): x for x in reversed(bruto)}.values())[::-1]  # sem repetir, nem com outra caixa
+            invalidos = [x for x in emails if not _EMAIL.fullmatch(x)]
+            ja = {p.lower() for p in e["participantes"]}
+            novos = [x for x in emails if x not in invalidos and x.lower() not in ja]
+            if invalidos:
+                flash(f"E-mail inválido: {', '.join(invalidos)}")
+            elif not novos:
+                flash("Essas pessoas já estão convidadas." if emails else "Informe pelo menos um e-mail.")
+            else:
+                try:
+                    convite = envio.convite_do_evento(event_id)
+                    if convite:  # convite saiu pelo Outlook: os novos recebem por ele; o Google não manda outro e-mail
+                        envio.incluir_no_convite(convite["entry_id"], novos)
+                        g.incluir_convidados(event_id, novos, avisar=False)
+                    else:
+                        g.incluir_convidados(event_id, novos)
+                except Exception as erro:
+                    flash(f"Não consegui convidar: {erro}")
+                else:
+                    flash(f"Convite enviado para {', '.join(novos)}. Quem já estava convidado não recebeu nada de novo.")
+                    return redirect(voltar)
+        return pagina(_tela("convidar.html"), e=e, voltar=voltar, texto=texto)
 
     # ------------------------------------------------------------ semana e mês
 

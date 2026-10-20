@@ -97,8 +97,9 @@ def _sincronizar_apos_alteracao(resposta):
 AO_VIVO: assistente.AoVivo | None = None  # assistente da reunião em andamento
 # Andamento do processamento depois que a gravação para (transcrição -> ata)
 TAREFA = {"ativa": False, "etapa": "", "pct": 0, "erro": None, "event_id": None, "titulo": "", "transcricao_salva": None,
-          "cancelavel": False, "cancelada": False}
+          "cancelavel": False, "cancelada": False, "etapa_desde": 0.0}
 CANCELAR_ATA = threading.Event()  # ligado pelo botão Cancelar; conferido na transcrição e na chamada ao Claude
+FILA: list[dict] = []  # atas esperando a vez enquanto outra é gerada: {"chave", "titulo", "event_id", "cancelada"}
 
 
 # ---------------------------------------------------------------- Lógica principal
@@ -175,18 +176,71 @@ def enviar_ata(event_id: str, destinatarios: list[str], remetente: str | None = 
 _fila_processamento = threading.Lock()
 
 
-def processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool = False) -> None:
+def entrar_na_fila(reuniao: dict) -> dict:
+    """Chamado pela rota antes de abrir a thread: se nada está sendo gerado, o painel já mostra 'Preparando';
+    senão a ata aparece na fila, com o seu próprio Cancelar."""
+    item = {"chave": os.urandom(4).hex(), "titulo": reuniao.get("titulo", ""), "event_id": reuniao["id"],
+            "cancelada": False}
+    FILA.append(item)
+    if not TAREFA["ativa"]:
+        TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, cancelada=False, cancelavel=False,
+                      event_id=reuniao["id"], titulo=item["titulo"], etapa_desde=time.time())
+    return item
+
+
+def tarefa_para_tela() -> dict:
+    """TAREFA mais o que a tela precisa: há quanto tempo está na etapa e as atas na fila."""
+    minutos = max(0, int((time.time() - TAREFA["etapa_desde"]) // 60)) if TAREFA["etapa_desde"] else 0
+    return {**TAREFA, "ha": f"há {minutos} min" if minutos else "há menos de 1 min", "fila": list(FILA)}
+
+
+def _sair_da_fila(item: dict | None) -> bool:
+    """Tira da fila ao chegar a vez. Devolve False se o usuário cancelou enquanto ela esperava."""
+    if item is None:
+        return True
+    if item in FILA:
+        FILA.remove(item)
+    return not item["cancelada"]
+
+
+def processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool = False, item: dict | None = None) -> None:
     """Roda em segundo plano: Whisper -> Claude -> Google Doc.
     avisar=True (gravação automática): notifica e abre a ata no navegador ao terminar."""
     with _fila_processamento:  # uma gravação por vez
-        _processar_gravacao(reuniao, arquivos, avisar)
+        if _sair_da_fila(item):
+            _processar_gravacao(reuniao, arquivos, avisar)
+        else:
+            _devolver_para_pendente(reuniao, arquivos)
+            _liberar_preparando()
+
+
+def _liberar_preparando() -> None:
+    """Item cancelado na fila: se era ele quem deixou o painel em 'Preparando' e não há mais ninguém esperando, solta a tarefa."""
+    if not FILA:
+        TAREFA.update(ativa=False, cancelavel=False)
+
+
+def _etapa(etapa: str, **outros) -> None:
+    TAREFA.update(etapa=etapa, etapa_desde=time.time(), **outros)
 
 
 def _comecar_tarefa(reuniao: dict, etapa: str, pct: int) -> None:
     CANCELAR_ATA.clear()
     ia.cancelavel(CANCELAR_ATA)
-    TAREFA.update(ativa=True, etapa=etapa, pct=pct, erro=None, transcricao_salva=None, cancelavel=True,
+    TAREFA.update(ativa=True, pct=pct, erro=None, transcricao_salva=None, cancelavel=True,
                   cancelada=False, event_id=reuniao["id"], titulo=reuniao.get("titulo", ""))
+    _etapa(etapa)
+
+
+def transcricao_ja_feita(arquivos: dict) -> Path | None:
+    """Transcrição do Whisper guardada de uma tentativa anterior (cancelada ou com erro no Claude)."""
+    if not arquivos:
+        return None
+    txt = Path(next(iter(arquivos.values()))).with_suffix(".txt")
+    try:
+        return txt if txt.read_text(encoding="utf-8", errors="replace").strip() else None
+    except OSError:
+        return None
 
 
 def _progresso_da_transcricao(pct: int) -> None:
@@ -196,7 +250,11 @@ def _progresso_da_transcricao(pct: int) -> None:
 
 def _ata_cancelada(reuniao: dict, arquivos: dict, ao_vivo: str = "") -> None:
     """Cancelada pelo usuário: a gravação volta para 'aguardando decisão' (dá para gerar depois ou apagar)."""
-    TAREFA.update(cancelada=True, etapa="Cancelada")
+    _etapa("Cancelada", cancelada=True)
+    _devolver_para_pendente(reuniao, arquivos, ao_vivo)
+
+
+def _devolver_para_pendente(reuniao: dict, arquivos: dict, ao_vivo: str = "") -> None:
     voce = arquivos.get("voce")
     if voce is None:
         return
@@ -219,14 +277,18 @@ def _ata_cancelada(reuniao: dict, arquivos: dict, ao_vivo: str = "") -> None:
 def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
     _comecar_tarefa(reuniao, "Transcrevendo o áudio", 0)
     try:
-        texto = gravador.transcrever(arquivos, progresso=_progresso_da_transcricao, reuniao=reuniao)
-        ia.conferir_cancelamento()
-        if not texto:
-            raise RuntimeError("Nenhuma fala foi reconhecida no áudio gravado.")
-        # Guarda a transcrição antes de chamar o Claude, para não perdê-la se algo falhar
-        txt = next(iter(arquivos.values())).with_suffix(".txt")
-        txt.write_text(texto, encoding="utf-8")
-        TAREFA.update(etapa="Escrevendo a ata com o Claude", pct=100, transcricao_salva=str(txt))
+        txt = transcricao_ja_feita(arquivos)
+        if txt:  # o Whisper já rodou numa tentativa anterior: vai direto para o Claude
+            texto = txt.read_text(encoding="utf-8")
+        else:
+            texto = gravador.transcrever(arquivos, progresso=_progresso_da_transcricao, reuniao=reuniao)
+            ia.conferir_cancelamento()
+            if not texto:
+                raise RuntimeError("Nenhuma fala foi reconhecida no áudio gravado.")
+            # Guarda a transcrição antes de chamar o Claude, para não perdê-la se algo falhar
+            txt = next(iter(arquivos.values())).with_suffix(".txt")
+            txt.write_text(texto, encoding="utf-8")
+        _etapa("Escrevendo a ata com o Claude", pct=100, transcricao_salva=str(txt))
         processar(reuniao, texto, f"Gravação no PC + Whisper ({config.WHISPER_MODELO})")
         TAREFA.update(etapa="Concluído")
         # Ata pronta e a reunião tem vídeo com áudio: os áudios separados não são mais necessários
@@ -242,6 +304,8 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
     except Exception as e:
         traceback.print_exc()
         TAREFA.update(erro=str(e))
+        if not atas.carregar(reuniao["id"]):  # dá para tentar de novo pelo painel
+            _devolver_para_pendente(reuniao, arquivos)
         if avisar:
             monitor.notificar("Erro ao gerar a ata", str(e)[:150])
     finally:
@@ -249,10 +313,14 @@ def _processar_gravacao(reuniao: dict, arquivos: dict, avisar: bool) -> None:
         TAREFA.update(ativa=False, cancelavel=False)
 
 
-def processar_texto(reuniao: dict, texto: str, arquivos: dict | None = None) -> None:
+def processar_texto(reuniao: dict, texto: str, arquivos: dict | None = None, item: dict | None = None) -> None:
     """Gera a ata a partir de uma transcrição já pronta (ex.: a feita ao vivo, quando o áudio está em outro PC).
     `arquivos` são os da gravação pendente, para ela voltar a aguardar decisão se o usuário cancelar."""
     with _fila_processamento:
+        if not _sair_da_fila(item):
+            _devolver_para_pendente(reuniao, arquivos or {}, texto)
+            _liberar_preparando()
+            return
         _comecar_tarefa(reuniao, "Escrevendo a ata com o Claude", 100)
         try:
             processar(reuniao, texto, "Transcrição feita ao vivo")
@@ -262,6 +330,8 @@ def processar_texto(reuniao: dict, texto: str, arquivos: dict | None = None) -> 
         except Exception as e:
             traceback.print_exc()
             TAREFA.update(erro=str(e))
+            if not atas.carregar(reuniao["id"]):  # dá para tentar de novo pelo painel
+                _devolver_para_pendente(reuniao, arquivos or {}, texto)
         finally:
             ia.cancelavel(None)
             TAREFA.update(ativa=False, cancelavel=False)
@@ -1065,7 +1135,7 @@ def inicio():
         hoje_txt=f"{DIAS_SEMANA[hoje.weekday()]}, {hoje.day} de {MESES[hoje.month - 1]}",
         semana=semana, semana_txt=semana_txt, dias=dias, eventos_hoje=eventos_hoje,
         minhas=minhas, recentes=recentes, feitas=atas.existentes(), pendentes=listar_pendentes(),
-        gravando=GRAVADOR.ativo, titulo_gravacao=(GRAVADOR.reuniao or {}).get("titulo", ""), tarefa=TAREFA,
+        gravando=GRAVADOR.ativo, titulo_gravacao=(GRAVADOR.reuniao or {}).get("titulo", ""), tarefa=tarefa_para_tela(),
         seletor_cliente=seletor_cliente, seu_nome=config.SEU_NOME, historico=historico, presos=envio.presos(),
         atencao=clientes.precisam_de_atencao(),
         status=clientes.status_sistema(sincronia.ESTADO, config.GRAVACAO_AUTOMATICA),
@@ -1138,8 +1208,8 @@ def parar():
     if GRAVADOR.ativo:
         try:
             reuniao, arquivos, _ = encerrar_gravacao()
-            TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, cancelada=False, event_id=reuniao["id"])
-            threading.Thread(target=processar_gravacao, args=(reuniao, arquivos), daemon=True).start()
+            item = entrar_na_fila(reuniao)
+            threading.Thread(target=processar_gravacao, args=(reuniao, arquivos, False, item), daemon=True).start()
         except Exception as e:
             flash(str(e))
     return redirect(url_for("gravacao"))
@@ -1147,7 +1217,15 @@ def parar():
 
 @app.post("/gravacao/cancelar-ata")
 def cancelar_ata():
-    if TAREFA["ativa"] and TAREFA["cancelavel"]:
+    chave = request.form.get("chave")
+    na_fila = next((i for i in FILA if chave and i["chave"] == chave), None)
+    if na_fila:
+        na_fila["cancelada"] = True  # sai quando chegar a vez, sem gerar nada
+        FILA.remove(na_fila)
+        flash(f'"{na_fila["titulo"] or "Reunião"}" saiu da fila. A gravação ficou aguardando decisão.')
+    elif chave:  # já saiu da fila: não mexe na ata que está sendo gerada sem o usuário ver qual é
+        flash("Essa ata já começou a ser gerada. Se quiser parar, use o Cancelar do aviso \"Gerando ata\".")
+    elif TAREFA["ativa"] and TAREFA["cancelavel"]:
         CANCELAR_ATA.set()
         TAREFA.update(etapa="Cancelando")
     elif TAREFA["ativa"] and TAREFA["etapa"] == "Preparando":
@@ -1246,11 +1324,12 @@ def pendente_gerar(pid):
             flash("O áudio desta reunião está em outro PC. Gere a ata por lá.")
             return redirect(url_for("pendente", pid=pid))
         _resolver_pendente(pid, p, "ata")
-        TAREFA.update(ativa=True, etapa="Preparando", pct=0, erro=None, cancelada=False, event_id=p["reuniao"]["id"])
+        item = entrar_na_fila(p["reuniao"])
         if arquivos:
-            threading.Thread(target=processar_gravacao, args=(p["reuniao"], arquivos), daemon=True).start()
+            threading.Thread(target=processar_gravacao, args=(p["reuniao"], arquivos, False, item), daemon=True).start()
         else:
-            threading.Thread(target=processar_texto, args=(p["reuniao"], p["transcricao_ao_vivo"], p["arquivos"]), daemon=True).start()
+            threading.Thread(target=processar_texto, args=(p["reuniao"], p["transcricao_ao_vivo"], p["arquivos"], item),
+                             daemon=True).start()
     return redirect(url_for("gravacao"))
 
 
@@ -1277,25 +1356,27 @@ def gravacao():
 Use <b>fone de ouvido</b> para a transcrição separar melhor quem falou.</p>
 <form method="post" action="{{ url_for('parar') }}" data-espera="Parando…"><button>■ Parar e gerar ata</button></form>
 {% elif tarefa.ativa %}<meta http-equiv="refresh" content="3">
-<h1>⏳ {{ tarefa.etapa }}…</h1>
+<h1>⏳ {{ tarefa.etapa }}…</h1>{% if tarefa.titulo %}<p><b>{{ tarefa.titulo }}</b></p>{% endif %}
+{% if tarefa.etapa.startswith('Escrevendo') %}<p>Começou {{ tarefa.ha }}. Costuma levar de 1 a 5 minutos.</p>{% endif %}
 {% if tarefa.etapa.startswith('Transcrevendo') %}<p>{{ tarefa.pct }}% concluído</p>
 <p class="mut">No primeiro uso o Whisper baixa o modelo de voz (alguns minutos). A transcrição roda no seu PC
 e leva aproximadamente de 1/4 a 1/2 da duração da reunião.</p>{% endif %}
 {% if tarefa.cancelavel and tarefa.etapa != 'Cancelando' %}<form method="post" action="{{ url_for('cancelar_ata') }}"
 onsubmit="return confirm('Cancelar a criação da ata? A gravação fica guardada para você gerar depois.')">
 <button class="sec" style="color:var(--err)">Cancelar criação da ata</button></form>{% endif %}
+{% for i in tarefa.fila %}<p class="mut">Na fila: {{ i.titulo or 'Reunião' }}</p>{% endfor %}
 {% elif tarefa.cancelada %}<h1>Criação da ata cancelada</h1>
 <p>A gravação ficou guardada em "Gravação aguardando decisão" no painel: dá para gerar a ata depois ou apagar.</p>
 <p><a class="btn" href="{{ url_for('inicio') }}">Voltar ao painel</a></p>
 {% elif tarefa.erro %}<h1>Algo deu errado</h1><p>{{ tarefa.erro }}</p>
-{% if tarefa.transcricao_salva %}<p class="mut">A transcrição foi salva em {{ tarefa.transcricao_salva }}.
-Você pode colá-la em "Colar transcrição".</p>{% endif %}
+{% if tarefa.transcricao_salva %}<p class="mut">A transcrição foi salva e a gravação voltou para "Gravação aguardando decisão"
+no painel: ao gerar a ata de novo, ela é aproveitada e o áudio não é transcrito outra vez.</p>{% endif %}
 {% else %}<h1>Nenhuma gravação em andamento</h1>{% endif %}""",
         gravando=GRAVADOR.ativo,
         automatica=GRAVADOR.automatica,
         titulo=(GRAVADOR.reuniao or {}).get("titulo", ""),
         duracao=GRAVADOR.duracao(),
-        tarefa=TAREFA,
+        tarefa=tarefa_para_tela(),
     )
 
 
