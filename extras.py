@@ -142,10 +142,21 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             if pendentes:
                 pauta = "Pendências em aberto:\n" + "\n".join(
                     f"- {t['descricao']} ({'nosso' if t['minha'] else 'cliente'})" for t in pendentes)
-            convidados = ", ".join(p["email"] for p in clientes.contatos(cliente_id))
+            # a turma da última reunião com o cliente; as outras pessoas do histórico ficam para marcar na tela
+            ultima = clientes.sugerir_convidados([], cliente_id)["ultima"]
+            convidados = ", ".join(ultima["emails"] if ultima else (p["email"] for p in clientes.contatos(cliente_id)))
         amanha = date.today() + timedelta(days=1)
         return pagina(_tela("nova_reuniao.html"), c=c, clientes=db.clientes(), pauta=pauta, convidados=convidados,
                       data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "")
+
+    @app.get("/reuniao/sugestoes")
+    def sugestoes_convidados():
+        """Pessoas do histórico de reuniões ligadas aos e-mails digitados (ou ao cliente), para a tela marcar."""
+        emails = [e.strip() for e in request.args.get("emails", "").replace(";", ",").split(",") if "@" in e]
+        cliente_id = request.args.get("cliente", type=int)
+        if not cliente_id and emails:   # sem cliente escolhido: o do primeiro e-mail conhecido
+            cliente_id = next((cid for cid in map(db.cliente_por_email, emails) if cid), None)
+        return clientes.sugerir_convidados(emails, cliente_id)
 
     # ------------------------------------------------------------ remarcar
 

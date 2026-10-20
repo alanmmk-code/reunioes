@@ -29,7 +29,32 @@ o Meet passa a reconhecer o cliente sozinho.</p>
 <label class="mut">Duração <select name="duracao">{% for m in [15, 30, 45, 60, 90, 120] %}<option value="{{ m }}" {{ 'selected' if m == 30 }}>{{ m }} min</option>{% endfor %}</select></label>
 </div>
 <label class="mut">Convidados (e-mails separados por vírgula)
-<input name="convidados" value="{{ convidados }}" placeholder="pessoa@cliente.com"></label>
+<input name="convidados" id="convidados" value="{{ convidados }}" placeholder="pessoa@cliente.com" autocomplete="off"></label>
+<div id="sugeridos" class="mut" hidden style="font-size:13px">
+<div class="row" style="justify-content:flex-start;gap:8px;margin-bottom:4px"><b>Do histórico de reuniões — marque quem vai</b>
+<button type="button" class="sec" id="sug-ultima" style="display:none"></button></div>
+<div id="sug-lista" style="display:flex;flex-wrap:wrap;gap:4px 14px"></div></div>
+<script>(()=>{const campo=document.getElementById('convidados'),box=document.getElementById('sugeridos'),
+lista=document.getElementById('sug-lista'),btn=document.getElementById('sug-ultima'),cli={{ (c.id if c else none)|tojson }};
+const atuais=()=>campo.value.split(/[,;]/).map(s=>s.trim()).filter(s=>s.includes('@'));
+const gravar=a=>{const vistos=new Set();campo.value=a.filter(x=>!vistos.has(x.toLowerCase())&&vistos.add(x.toLowerCase())).join(', ')};
+const marcar=(email,sim)=>{const a=atuais().filter(x=>x.toLowerCase()!==email);if(sim)a.push(email);gravar(a)};
+const sincronizar=()=>{const tem=new Set(atuais().map(x=>x.toLowerCase()));
+lista.querySelectorAll('input').forEach(i=>i.checked=tem.has(i.value))};
+let pedido=0,ultimaBusca=null;
+const buscar=()=>{const emails=atuais().join(',');if(emails===ultimaBusca)return sincronizar();ultimaBusca=emails;
+const n=++pedido,q=new URLSearchParams({emails});if(cli)q.set('cliente',cli);
+fetch('{{ url_for("sugestoes_convidados") }}?'+q).then(r=>r.json()).then(d=>{if(n!==pedido)return;
+lista.replaceChildren(...d.pessoas.map(p=>{const l=document.createElement('label'),i=document.createElement('input');
+i.type='checkbox';i.value=p.email;i.addEventListener('change',()=>marcar(p.email,i.checked));
+l.style.cssText='display:flex;gap:5px;align-items:center;cursor:pointer';l.title=p.email;
+l.append(i,(p.nome||p.email)+(p.reunioes?' ('+p.reunioes+')':''));return l}));
+btn.style.display=d.ultima?'':'none';if(d.ultima){const[a,m,dd]=d.ultima.data.split('-');
+btn.textContent='Mesmas pessoas da última: '+d.ultima.titulo+(dd?' ('+dd+'/'+m+')':'');
+btn.onclick=()=>{gravar(atuais().concat(d.ultima.emails));sincronizar()}}
+box.hidden=!d.pessoas.length;sincronizar()}).catch(()=>{})};
+let t;campo.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(buscar,500)});
+campo.addEventListener('change',buscar);buscar()})()</script>
 <label class="mut">Pauta <textarea name="pauta" rows="8">{{ pauta }}</textarea></label>
 {{ seletor_remetente()|safe }}
 <p class="mut" style="margin:0;font-size:12.5px">A reunião é criada no seu Google Agenda com o link do Meet, e o convite

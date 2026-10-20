@@ -68,6 +68,66 @@ def contatos(cliente_id) -> list[dict]:
     return sorted(pessoas.values(), key=lambda x: -x["reunioes"])
 
 
+DOMINIOS_PESSOAIS = {"gmail.com", "hotmail.com", "outlook.com", "live.com", "yahoo.com", "yahoo.com.br", "icloud.com",
+                     "uol.com.br", "bol.com.br", "terra.com.br", "msn.com"}
+_historico = {"quando": 0.0, "eventos": []}
+
+
+def _reunioes_passadas(dias=180) -> list[dict]:
+    """Reuniões da agenda (últimos `dias` e próximos 30) mais as atas salvas. Cache de 10 min: a tela de nova reunião
+    consulta a cada e-mail digitado."""
+    if time.time() - _historico["quando"] > 600:
+        agora = datetime.now().astimezone()
+        try:
+            eventos = g.listar_eventos(agora - timedelta(days=dias), agora + timedelta(days=30))
+        except Exception:
+            eventos = []
+        vistos = {e["id"] for e in eventos}
+        for event_id in atas.existentes():
+            r = (atas.carregar(event_id) or {}).get("reuniao") or {}
+            if event_id not in vistos and r.get("participantes"):
+                eventos.append({"id": event_id, "titulo": r.get("titulo", ""), "inicio": r.get("inicio", ""),
+                                "participantes": r["participantes"]})
+        _historico.update(quando=time.time(), eventos=eventos)
+    return _historico["eventos"]
+
+
+def sugerir_convidados(emails, cliente_id=None, eventos=None, eu=None) -> dict:
+    """Quem costuma estar nas reuniões com estas pessoas (ou com o cliente), para marcar em vez de digitar.
+
+    Reunião relacionada = teve alguém de `emails`, alguém do mesmo domínio de empresa ou um contato do cliente.
+    Devolve {"pessoas": [{email, nome, reunioes, ultima}], "ultima": {titulo, data, emails} | None}; "ultima" é a
+    turma da reunião relacionada mais recente (atalho "mesmas pessoas da última")."""
+    eu = (minha_conta() if eu is None else eu).lower()
+    meu_dominio = eu.split("@")[-1] if "@" in eu else None
+    digitados = {e.strip().lower() for e in emails if "@" in (e or "")}
+    dominios = {e.split("@")[1] for e in digitados} - DOMINIOS_PESSOAIS - {meu_dominio}
+    do_cliente = set()
+    if cliente_id:
+        do_cliente = {p["email"] for p in contatos(cliente_id)}
+        c = db.cliente(cliente_id) or {}
+        dominios |= {e.strip().lstrip("@").lower() for e in (c.get("emails") or "").split(",") if e.strip().startswith("@")}
+    pessoas, ultima = {}, None
+    for ev in sorted(eventos if eventos is not None else _reunioes_passadas(), key=lambda e: e.get("inicio") or ""):
+        part = [p for p in ev.get("participantes") or [] if "@" in (p.get("email") or "")]
+        mails = {p["email"].lower() for p in part if not p["email"].lower().endswith("calendar.google.com")} - {eu}
+        if not mails or not (mails & (digitados | do_cliente) or any(m.split("@")[1] in dominios for m in mails)):
+            continue
+        data = (ev.get("inicio") or "")[:10]
+        ultima = {"titulo": ev.get("titulo", ""), "data": data, "emails": sorted(mails)}
+        for p in part:
+            m = p["email"].lower()
+            if m in mails:
+                item = pessoas.setdefault(m, {"email": m, "nome": "", "reunioes": 0, "ultima": ""})
+                item["reunioes"] += 1
+                item["ultima"] = max(item["ultima"], data)
+                item["nome"] = item["nome"] or p.get("nome") or ""
+    for m in do_cliente - set(pessoas):   # contato cadastrado que ainda não esteve em reunião
+        pessoas[m] = {"email": m, "nome": "", "reunioes": 0, "ultima": ""}
+    lista = sorted(pessoas.values(), key=lambda x: (x["reunioes"], x["ultima"]), reverse=True)
+    return {"pessoas": lista[:20], "ultima": ultima}
+
+
 def proximas_reunioes(cliente_id, eventos: list[dict], sugerir_cliente) -> list[dict]:
     return [e for e in eventos if e.get("link") and not e["ja_terminou"] and sugerir_cliente(e) == cliente_id]
 
