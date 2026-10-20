@@ -102,6 +102,10 @@ def clientes_das_reunioes(eventos) -> dict:
     for ev in eventos:
         if not ev.get("id"):  # sem id não dá para guardar a atribuição (id-less colidiriam na mesma chave)
             continue
+        fixado = db.cliente_por_uuid(ev.get("cliente_uuid")) if ev.get("cliente_uuid") else None
+        if fixado and not fixado.get("excluido"):  # escolhido na tela de resumo
+            resultado[ev["id"]] = fixado["id"]
+            continue
         reg = atas.carregar(ev["id"])
         if reg and reg.get("cliente_id"):
             resultado[ev["id"]] = reg["cliente_id"]
@@ -127,6 +131,18 @@ def clientes_das_reunioes(eventos) -> dict:
         elif maior and len(candidatos) == 1:
             resultado[ev.get("id")] = candidatos[0]
     return resultado
+
+
+def consultores_conhecidos() -> list[str]:
+    """Consultores já anotados nas reuniões, do mais usado para o menos (para sugerir no campo)."""
+    contagem = {}
+    for ev in _reunioes_passadas():
+        nome = (ev.get("consultor") or "").strip()
+        if nome:
+            chave = unicodedata.normalize("NFC", nome).casefold()
+            vezes, escrito = contagem.get(chave, (0, nome))
+            contagem[chave] = (vezes + 1, escrito)
+    return [escrito for _, escrito in sorted(contagem.values(), key=lambda x: (-x[0], x[1].casefold()))]
 
 
 def sugerir_convidados(emails, cliente_id=None, eventos=None, eu=None) -> dict:

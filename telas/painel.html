@@ -116,7 +116,7 @@ Abra o Outlook e aperte F9 (Enviar/Receber).</b>
 {% for e in d.eventos %}
 <div class="ev {{ 'meet' if e.link }} {{ 'agora' if e.agora }}">
 <span class="h">{{ e.hora }}{% if e.hora_fim %}–{{ e.hora_fim }}{% endif %}</span>
-<span class="t">{{ e.titulo }}{% if e.cliente %} <small>{{ e.cliente }}</small>{% elif e.local %} <small>{{ e.local }}</small>{% endif %}</span>
+<span class="t">{{ e.titulo }}{% if e.cliente or e.consultor %} <small>{{ e.cliente or '' }}{% if e.cliente and e.consultor %} · {% endif %}{% if e.consultor %}Consultor: {{ e.consultor }}{% endif %}</small>{% elif e.local %} <small>{{ e.local }}</small>{% endif %}</span>
 <span class="ac">
 {% if e.agora %}<span class="tag agora">agora</span>{% endif %}
 {% if e.link %}

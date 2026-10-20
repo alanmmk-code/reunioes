@@ -142,7 +142,10 @@ def tarefas_da_ata(event_id: str) -> str:
 
 def sugerir_cliente(reuniao: dict) -> int | None:
     """Cliente provável: pelos e-mails/domínio cadastrados no cliente; senão, pelas atas anteriores
-    com as mesmas pessoas ou o mesmo título."""
+    com as mesmas pessoas ou o mesmo título. O cliente escolhido na tela de resumo vale sobre tudo isso."""
+    fixado = db.cliente_por_uuid(reuniao.get("cliente_uuid")) if reuniao.get("cliente_uuid") else None
+    if fixado and not fixado.get("excluido"):
+        return fixado["id"]
     emails = {p["email"].lower() for p in reuniao.get("participantes", [])}
     for email in emails:
         cid = db.cliente_por_email(email)
@@ -1703,6 +1706,38 @@ def ultima_ata_do_cliente(cliente_id) -> dict | None:
     return {"event_id": event_id, **reg}
 
 
+@app.post("/resumo/<event_id>/cliente")
+def resumo_cliente(event_id):
+    """Fixa o cliente da reunião (vale na agenda, nas sugestões de convidados e na ata gerada depois)."""
+    cli = db.cliente(request.form.get("cliente", type=int))
+    if not g.obter_reuniao(event_id):
+        flash("Reunião não encontrada na agenda.")
+        return redirect(url_for("inicio"))
+    try:
+        g.definir_cliente_do_evento(event_id, cli["uuid"] if cli else None)
+        clientes._historico["quando"] = 0  # as sugestões de convidados releem a agenda
+        flash(f"Cliente da reunião: {cli['nome']}." if cli else "Reunião sem cliente fixado; o painel volta a sugerir.")
+    except Exception as e:
+        flash(f"Não consegui salvar o cliente: {e}")
+    return redirect(url_for("resumo", event_id=event_id))
+
+
+@app.post("/resumo/<event_id>/consultor")
+def resumo_consultor(event_id):
+    """Anota quem é o consultor da reunião (aparece na agenda); vazio apaga."""
+    consultor = " ".join(request.form.get("consultor", "").split())[:80]
+    if not g.obter_reuniao(event_id):
+        flash("Reunião não encontrada na agenda.")
+        return redirect(url_for("inicio"))
+    try:
+        g.definir_consultor_do_evento(event_id, consultor)
+        clientes._historico["quando"] = 0  # a lista de consultores sugeridos relê a agenda
+        flash(f"Consultor da reunião: {consultor}." if consultor else "Consultor apagado desta reunião.")
+    except Exception as e:
+        flash(f"Não consegui salvar o consultor: {e}")
+    return redirect(url_for("resumo", event_id=event_id))
+
+
 @app.route("/resumo/<event_id>")
 def resumo(event_id):
     r = g.obter_reuniao(event_id)
@@ -1730,10 +1765,16 @@ def resumo(event_id):
 <form class="inline" method="post" action="{{ url_for('cancelar_reuniao', event_id=r.id, voltar=request.full_path) }}" onsubmit='return confirm({{ ("Cancelar a reunião “" ~ r.titulo ~ "”? Ela sai da agenda e os convidados recebem o cancelamento.")|tojson }})'><button class="sec" title="Cancelar para todos">Cancelar</button></form>{% endif %}
 <a class="btn" href="{{ r.link }}" target="_blank">Entrar no Meet</a></div></div>
 
-<form method="get" class="row" style="justify-content:flex-start;margin:6px 0 4px">
+<form method="post" action="{{ url_for('resumo_cliente', event_id=r.id) }}" class="row" style="justify-content:flex-start;margin:6px 0 4px">
 <span class="mut">Cliente:</span><select name="cliente" onchange="this.form.submit()" style="width:auto">
 <option value="">— nenhum —</option>{% for c in clientes %}<option value="{{ c.id }}" {{ 'selected' if cli and c.id == cli.id }}>{{ c.nome }}</option>{% endfor %}</select>
-{% if not cli %}<span class="mut">Escolha o cliente para ver as pendências e a última reunião.</span>{% endif %}</form>
+{% if not cli %}<span class="mut">Escolha o cliente para ver as pendências e a última reunião.</span>
+{% elif not r.cliente_uuid %}<span class="mut">sugerido pelo painel; escolha na lista para fixar</span>{% endif %}</form>
+<form method="post" action="{{ url_for('resumo_consultor', event_id=r.id) }}" class="row" style="justify-content:flex-start;margin:0 0 10px">
+<span class="mut">Consultor:</span><input name="consultor" value="{{ r.consultor }}" list="consultores" maxlength="80"
+placeholder="quem vai conduzir" style="width:220px" autocomplete="off">
+<datalist id="consultores">{% for n in consultores %}<option value="{{ n }}">{% endfor %}</datalist>
+<button class="sec">Salvar</button></form>
 
 <div class="rs-grid">
 <div class="card rs"><h3>Suas pendências{% if cli %} com {{ cli.nome }}{% endif %}</h3>
@@ -1762,7 +1803,7 @@ def resumo(event_id):
 {% if s.solucao %}<p class="mut" style="margin-bottom:4px">Proposta enviada:</p><p style="white-space:pre-wrap">{{ s.solucao }}</p>{% endif %}
 </div>{% endfor %}
 </div>""",
-        r=r, cli=cli, res=res, anterior=anterior, inicio=inicio, faltam=faltam, pauta=pauta, clientes=db.clientes(),
+        r=r, cli=cli, res=res, anterior=anterior, inicio=inicio, faltam=faltam, pauta=pauta, clientes=db.clientes(), consultores=clientes.consultores_conhecidos(),
         sd=[s for s in service_desk.casos_do_cliente(cli["nome"])["casos"] if s["aberto"]] if cli else [],
     )
 

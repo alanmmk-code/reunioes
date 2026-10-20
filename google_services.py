@@ -168,6 +168,9 @@ def _eventos(inicio: datetime, fim: datetime) -> list[dict]:
                     if not a.get("resource")
                 ],
                 "anexos": ev.get("attachments", []),
+                # cliente escolhido no painel: guardado no próprio evento (só na sua agenda; os convidados não veem)
+                "cliente_uuid": ((ev.get("extendedProperties") or {}).get("private") or {}).get("cliente_uuid") or None,
+                "consultor": (((ev.get("extendedProperties") or {}).get("private") or {}).get("consultor") or "").strip(),
                 # só quem organizou pode mudar data/hora para todos
                 "organizador": bool((ev.get("organizer") or {}).get("self")),
                 "ja_terminou": datetime.fromisoformat(fim_ev.replace("Z", "+00:00")).astimezone(timezone.utc) < agora
@@ -197,7 +200,7 @@ def obter_reuniao(event_id: str) -> dict | None:
 
 
 def agendar_followup(titulo: str, inicio: datetime, duracao_min: int, emails: list[str], descricao: str,
-                     enviar_convites: bool = True) -> dict:
+                     enviar_convites: bool = True, consultor: str = "") -> dict:
     """Cria um evento com link do Meet. Com enviar_convites=False o Google não manda e-mail
     (o convite sai pelo Outlook — ver envio.py)."""
     body = {
@@ -206,6 +209,7 @@ def agendar_followup(titulo: str, inicio: datetime, duracao_min: int, emails: li
         "start": {"dateTime": inicio.isoformat(), "timeZone": config.TIMEZONE},
         "end": {"dateTime": (inicio + timedelta(minutes=duracao_min)).isoformat(), "timeZone": config.TIMEZONE},
         "attendees": [{"email": e} for e in emails],
+        "extendedProperties": {"private": {"consultor": (consultor or "").strip()[:80]}},
         "conferenceData": {
             "createRequest": {"requestId": uuid.uuid4().hex, "conferenceSolutionKey": {"type": "hangoutsMeet"}}
         },
@@ -260,6 +264,21 @@ def incluir_convidados(event_id: str, emails: list[str], avisar: bool = True) ->
         eventos.patch(calendarId="primary", eventId=event_id, body={"attendees": atuais + [{"email": e} for e in novos]},
                       sendUpdates="all" if avisar else "none").execute()
     return novos
+
+
+def definir_cliente_do_evento(event_id: str, cliente_uuid: str | None) -> None:
+    """Guarda no evento (propriedade privada da sua cópia, sem avisar ninguém) o cliente escolhido no painel.
+    None volta a deixar o painel adivinhar."""
+    (_svc("calendar", "v3").events()
+     .patch(calendarId="primary", eventId=event_id, sendUpdates="none",
+            body={"extendedProperties": {"private": {"cliente_uuid": cliente_uuid or ""}}}).execute())
+
+
+def definir_consultor_do_evento(event_id: str, consultor: str) -> None:
+    """Guarda no evento (propriedade privada, sem avisar ninguém) quem é o consultor da reunião; vazio apaga."""
+    (_svc("calendar", "v3").events()
+     .patch(calendarId="primary", eventId=event_id, sendUpdates="none",
+            body={"extendedProperties": {"private": {"consultor": (consultor or "").strip()[:80]}}}).execute())
 
 
 def cancelar_evento(event_id: str, avisar: bool = True) -> None:

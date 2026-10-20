@@ -28,6 +28,8 @@ o Meet passa a reconhecer o cliente sozinho.</p>
 <label class="mut">Hora <input type="time" name="hora" value="10:00" required></label>
 <label class="mut">Duração <select name="duracao">{% for m in duracoes %}<option value="{{ m }}" {{ 'selected' if m == 30 }}>{% if m < 60 %}{{ m }} min{% else %}{{ m // 60 }}h{% if m % 60 %}{{ '%02d' % (m % 60) }}{% endif %}{% endif %}</option>{% endfor %}</select></label>
 </div>
+<label class="mut">Consultor <input name="consultor" list="consultores" maxlength="80" placeholder="quem vai conduzir" autocomplete="off"></label>
+<datalist id="consultores">{% for n in consultores %}<option value="{{ n }}">{% endfor %}</datalist>
 <label class="mut">Convidados (e-mails separados por vírgula)
 <input name="convidados" id="convidados" value="{{ convidados }}" placeholder="pessoa@cliente.com" autocomplete="off"></label>
 <div id="sugeridos" class="mut" hidden style="font-size:13px">

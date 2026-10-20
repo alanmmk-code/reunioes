@@ -122,7 +122,9 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                 titulo, duracao = request.form["titulo"].strip() or "Reunião", max(5, min(int(request.form.get("duracao", 30)), 24 * 60))
                 pauta = request.form.get("pauta", "").strip()
                 # evento (com Meet) no Google Agenda sem e-mail do Google; o convite sai pelo Outlook
-                criado = g.agendar_followup(titulo, inicio, duracao, convidados, pauta, enviar_convites=False)
+                consultor = " ".join(request.form.get("consultor", "").split())[:80]
+                criado = g.agendar_followup(titulo, inicio, duracao, convidados, pauta, enviar_convites=False,
+                                            consultor=consultor)
                 remetente = request.form.get("remetente") or envio.remetente_padrao()
                 if convidados:
                     try:
@@ -152,7 +154,8 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
             convidados = ", ".join(ultima["emails"] if ultima else (p["email"] for p in clientes.contatos(cliente_id)))
         amanha = date.today() + timedelta(days=1)
         return pagina(_tela("nova_reuniao.html"), c=c, clientes=db.clientes(), pauta=pauta, convidados=convidados,
-                      data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "", duracoes=DURACOES)
+                      data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "", duracoes=DURACOES,
+                      consultores=clientes.consultores_conhecidos())
 
     @app.get("/reuniao/sugestoes")
     def sugestoes_convidados():
