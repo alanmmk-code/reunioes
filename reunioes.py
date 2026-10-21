@@ -7,6 +7,7 @@ Uso:
 """
 
 import json
+import math
 import os
 import re
 from urllib.parse import quote, urlencode
@@ -609,6 +610,8 @@ def api_extensao_estado():
             try:
                 pico = float(d.get("pico") or 0)
             except (TypeError, ValueError):
+                pico = 0.0
+            if not math.isfinite(pico):  # NaN/infinito não é som: conta como silêncio
                 pico = 0.0
             EXTENSAO["pico"] = max(EXTENSAO["pico"], pico)
             if pico > SOM_MINIMO:

@@ -1,0 +1,10 @@
+{
+ "semente": "1000",
+ "passos": [
+  384
+ ],
+ "chave": "I48-aviso-mudo-contagem:certo:False",
+ "catalogo": "v8",
+ "carimbo": "8fbd472c8f86",
+ "msg": "B: cenario=certo passo 0: notificou 0x, esperado 1x (t=180s desde o inicio, corpo {'aba': 7, 'em_chamada': True, 'titulo': '', 'pico': 'nan', 'trilhas': 'x', 'diag': 'texto'})"
+}

@@ -157,17 +157,28 @@ class _TrilhaExterna(_Trilha):
         self._wav, self._inicio, self._escritas = None, None, 0
         self.do_pc = False  # True: a trilha recebe o som do PC (loopback) e ignora o que vem da extensão
 
-    def run(self):
+    def start(self):
+        # Abre o arquivo antes de a gravação começar: o primeiro áudio da extensão pode chegar
+        # antes de a thread rodar, e se perderia.
         try:
-            with wave.open(str(self.caminho), "wb") as wav:
-                wav.setnchannels(1)
-                wav.setsampwidth(2)
-                wav.setframerate(TAXA)
-                with self._lock:
-                    self._wav, self._inicio = wav, time.time()
-                self.parar.wait()
-                with self._lock:
-                    self._wav = None
+            wav = wave.open(str(self.caminho), "wb")
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(TAXA)
+            self._wav, self._inicio = wav, time.time()
+        except Exception as e:
+            self.erro = e
+            print(f"[gravador] trilha {self.caminho.name} falhou: {e!r}")
+        super().start()
+
+    def run(self):
+        if self._wav is None:
+            return
+        self.parar.wait()
+        with self._lock:
+            wav, self._wav = self._wav, None
+        try:
+            wav.close()
         except Exception as e:
             self.erro = e
             print(f"[gravador] trilha {self.caminho.name} falhou: {e!r}")

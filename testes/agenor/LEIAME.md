@@ -34,8 +34,8 @@ desfaz, idempotente), H1..H4 (hostis), R1/R2 (rota estoura / 5xx).
 `v1` = acoes.py, `v2` = v1 + acoes2.py (clientes/sincronia), `v3` = v2 + acoes3.py (pessoas dos clientes, remarcar,
 envios presos no Outlook, extensao sem gravacao), `v4` = v3 + acoes4.py (excluir cliente e recadastrar), `v5` = v4 + acoes5.py (POST de outro site, DNS rebinding), `v6` = v5 + acoes6.py (copias de seguranca: voltar e desfazer;
 "Reconectar Google"; aviso de PC parado; sinal de vida hostil no Drive), `v7` = v6 + acoes7.py (som mudo da extensao, vinculos de
-convite do Outlook entre PCs, editar ata com o Doc alterado fora do painel, arquivar videos antigos). Cada um CONGELADO quando o
-seguinte nasce: acao nova vai num catalogo novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v7.
+convite do Outlook entre PCs, editar ata com o Doc alterado fora do painel, arquivar videos antigos), `v8` = v7 + acoes8.py (som do PC no lugar da extensao). Cada um CONGELADO quando o
+seguinte nasce: acao nova vai num catalogo novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v8.
 Propriedades do v6: I30/I31 (voltar para copia reproduz tarefas/notas/clientes da copia e nao perde o criado depois), I32 (a copia
 "antes de voltar" desfaz), I33 (nome de copia hostil nao muda nada), I34/I35 (aviso e login do Google, sem login duplo), I36/I37
 (aviso de PC parado, escapado; esquecer PC), H6 (sinal de vida com appProperties estranhos), I38 (cancelar reuniao: so o organizador;
@@ -53,6 +53,22 @@ sorteado: mexido = mais de 3 min depois de doc_salvo_em/gerada_em; mexido sem su
 intocados; com substituir=1 ou nao mexido => salva e grava doc_salvo_em; excecao/None nunca da 5xx nem bloqueia), I52 (`arquivar_videos`:
 VIDEOS_DIAS<=0 nada some; nunca apaga *-tela*, mais novo que o limite, outro tipo, nem o que nao confere no Drive; ocupado() para; upload
 que falha/trunca nao perde o video). Fora do alcance: o passo 1b de `_sincronizar` (Drive); so a mesclagem pura e testada.
+Propriedades do v8 (commit 02e0eb6 + `_TrilhaExterna.start()`): I53 (som do PC; `f_som_do_pc` em acoes8.py). Roda o Gravador REAL com uma
+`_TrilhaExterna` real (WAV em pasta temporaria) e troca `gravador._SomDoPC` por um duble (`_SomDoPCFalso`: nada de soundcard; modos ok /
+falha_na_hora / falha_depois; alimenta com do_pc=True o valor -0.25, a extensao manda 0.5 por `/api/extensao/audio`); `gravador.time`
+e `reunioes.time` sao o mesmo relogio virtual e `gravador.wave` abre devagar (30 ms) para o primeiro audio logo depois de `start()` so
+sobreviver se o WAV for aberto dentro de `start()`. Cenarios: certo, sem_trilha (como o f_som_mudo da v7, que continua valendo), manual,
+nao_automatica, sem_gravacao, arquivo_ruim. Cobra: troca so depois de SOM_PC_SEG de silencio em chamada (I53-troca-cedo); volta quando
+chega som; o estado do modelo = `usando_som_do_pc` = `trilha.do_pc`; o audio da fonte fora de uso e ignorado (conferido por `_escritas`
+a cada alimentar) e o WAV final tem so as amostras da fonte em uso, na ordem (I53-wav-misturado); trilha alinhada (`_escritas` perto do
+tempo corrido); duble que falha nunca e recriado (1 por gravacao) e o aviso de som mudo (so se o som do PC NAO esta em uso) segue a regra;
+fora de gravacao / manual / nao automatica nada troca nem avisa; `parar()` limpa tudo e `usar_som_do_pc` sem gravacao devolve False;
+/gravacao mostra "gravada pelo som do PC" so quando em uso. O modelo do aviso mudo da regra nova esta em f_som_do_pc; f_som_mudo (v7) fica
+como esta porque seu Gravador nao tem trilhas.
+Mutantes (copias em AGENOR_ALVO, nunca no codigo real) que o I53 pega: troca com 5 s em vez de 45; `alimentar` sem checar do_pc; ignorar
+`_SomDoPC.erro`; aviso mudo sem a condicao do som do PC; `start()` antigo (WAV aberto na thread); nao voltar para a extensao; tentar de
+novo apos falha; sem preencher buraco; tela sempre dizendo som do PC; trocar fora de chamada. Para refazer: copie os *.py para uma pasta,
+mude uma linha e rode com `AGENOR_ALVO=<pasta>` (o passeio so da acao: filtre os indices por `N.escolher(...)[0].nome`).
 Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
 certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
 S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).
