@@ -442,6 +442,12 @@ def drive_listar(pasta_id: str) -> dict[str, dict]:
             return arquivos
 
 
+def drive_espaco() -> tuple[int, int]:
+    """(usado, limite) do armazenamento da conta Google, em bytes. Limite 0 = sem limite."""
+    q = _svc("drive", "v3").about().get(fields="storageQuota").execute()["storageQuota"]
+    return int(q.get("usage") or 0), int(q.get("limit") or 0)
+
+
 def drive_tamanhos(pasta_id: str) -> dict[str, set[int]]:
     """Arquivos da pasta: nome -> tamanhos em bytes (para conferir um envio antes de apagar o original)."""
     drive, tamanhos, token = _svc("drive", "v3"), {}, None

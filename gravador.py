@@ -87,6 +87,29 @@ def _microfone(parte_do_nome: str):
     return None
 
 
+def _capturar(dispositivo, parar: threading.Event, escrever, nome: str) -> None:
+    """Lê o dispositivo até `parar` e passa cada pedaço (mono, float32) para escrever(). Reabre se cair."""
+    falhas = 0
+    while not parar.is_set():
+        try:
+            with dispositivo.recorder(samplerate=TAXA, channels=1) as rec:
+                while not parar.is_set():
+                    dados = rec.record(numframes=None)  # lê o que estiver disponível, sem atrasar
+                    if len(dados):
+                        escrever(np.clip(dados[:, 0], -1, 1).astype(np.float32))
+                        falhas = 0
+                    else:
+                        time.sleep(0.01)
+        except Exception as e:
+            # O Windows às vezes devolve avisos (ex.: S_FALSE) que o soundcard trata como erro,
+            # ou o dispositivo some por um instante: reabre em vez de perder o resto da reunião.
+            falhas += 1
+            print(f"[gravador] trilha {nome}: {e!r}; reabrindo ({falhas})")
+            if falhas >= 30:
+                raise
+            parar.wait(1)
+
+
 class _Trilha(threading.Thread):
     def __init__(self, dispositivo, caminho, parar: threading.Event):
         super().__init__(daemon=True)
@@ -101,34 +124,21 @@ class _Trilha(threading.Thread):
                 wav.setnchannels(1)
                 wav.setsampwidth(2)
                 wav.setframerate(TAXA)
-                inicio, escritas, falhas = time.time(), 0, 0
-                while not self.parar.is_set():
-                    try:
-                        with self.dispositivo.recorder(samplerate=TAXA, channels=1) as rec:
-                            while not self.parar.is_set():
-                                dados = rec.record(numframes=None)  # lê o que estiver disponível, sem atrasar
-                                if len(dados):
-                                    mono = np.clip(dados[:, 0], -1, 1).astype(np.float32)
-                                    # Depois de reabrir o dispositivo: silêncio no intervalo, para continuar
-                                    # alinhada no tempo com as outras trilhas
-                                    faltam = int((time.time() - inicio) * TAXA) - len(mono) - escritas
-                                    if faltam > TAXA // 2:
-                                        mono = np.concatenate([np.zeros(faltam, dtype=np.float32), mono])
-                                    wav.writeframes((mono * 32767).astype("<i2").tobytes())
-                                    escritas += len(mono)
-                                    falhas = 0
-                                    with self._lock:
-                                        self._novos.append(mono)
-                                else:
-                                    time.sleep(0.01)
-                    except Exception as e:
-                        # O Windows às vezes devolve avisos (ex.: S_FALSE) que o soundcard trata como erro,
-                        # ou o dispositivo some por um instante: reabre em vez de perder o resto da reunião.
-                        falhas += 1
-                        print(f"[gravador] trilha {self.caminho.name}: {e!r}; reabrindo ({falhas})")
-                        if falhas >= 30:
-                            raise
-                        self.parar.wait(1)
+                inicio, escritas = time.time(), 0
+
+                def escrever(mono):
+                    nonlocal escritas
+                    # Depois de reabrir o dispositivo: silêncio no intervalo, para continuar
+                    # alinhada no tempo com as outras trilhas
+                    faltam = int((time.time() - inicio) * TAXA) - len(mono) - escritas
+                    if faltam > TAXA // 2:
+                        mono = np.concatenate([np.zeros(faltam, dtype=np.float32), mono])
+                    wav.writeframes((mono * 32767).astype("<i2").tobytes())
+                    escritas += len(mono)
+                    with self._lock:
+                        self._novos.append(mono)
+
+                _capturar(self.dispositivo, self.parar, escrever, self.caminho.name)
         except Exception as e:
             self.erro = e
             print(f"[gravador] trilha {self.caminho.name} falhou: {e!r}")
@@ -145,6 +155,7 @@ class _TrilhaExterna(_Trilha):
     def __init__(self, caminho, parar: threading.Event):
         super().__init__(None, caminho, parar)
         self._wav, self._inicio, self._escritas = None, None, 0
+        self.do_pc = False  # True: a trilha recebe o som do PC (loopback) e ignora o que vem da extensão
 
     def run(self):
         try:
@@ -161,9 +172,9 @@ class _TrilhaExterna(_Trilha):
             self.erro = e
             print(f"[gravador] trilha {self.caminho.name} falhou: {e!r}")
 
-    def alimentar(self, mono: np.ndarray) -> None:
+    def alimentar(self, mono: np.ndarray, do_pc: bool = False) -> None:
         with self._lock:
-            if self._wav is None:
+            if self._wav is None or do_pc != self.do_pc:
                 return
             # Buraco (a chamada conectou depois do início, ou o envio pausou): completa com silêncio
             # para a trilha continuar alinhada no tempo com o microfone.
@@ -173,6 +184,25 @@ class _TrilhaExterna(_Trilha):
             self._wav.writeframes((np.clip(mono, -1, 1) * 32767).astype("<i2").tobytes())
             self._escritas += len(mono)
             self._novos.append(mono)
+
+
+class _SomDoPC(threading.Thread):
+    """Plano B da extensão: capta o que sai no alto-falante/fone e entrega na trilha "outros"."""
+
+    def __init__(self, trilha: _TrilhaExterna, parar: threading.Event):
+        super().__init__(daemon=True)
+        self.trilha, self.parar, self.erro = trilha, parar, None
+
+    def run(self):
+        import soundcard as sc
+
+        try:
+            dev = sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True)
+            _capturar(dev, self.parar, lambda mono: self.trilha.alimentar(mono, do_pc=True), "som do PC")
+        except Exception as e:
+            self.erro = e
+            self.trilha.do_pc = False  # volta a aceitar o som da extensão
+            print(f"[gravador] som do PC falhou: {e!r}")
 
 
 class Gravador:
@@ -186,6 +216,7 @@ class Gravador:
         self._trilhas = []
         self.trilhas = {}
         self.pela_extensao = False  # "outros" vem da aba do Meet (extensão), não do alto-falante
+        self._som_do_pc = None  # _SomDoPC, ligado quando a extensão para de mandar som
 
     def iniciar(self, reuniao: dict, pela_extensao: bool = False) -> None:
         import soundcard as sc
@@ -221,10 +252,12 @@ class Gravador:
         self._parar.set()
         for t in self._trilhas:
             t.join(timeout=10)
+        if self._som_do_pc is not None:
+            self._som_do_pc.join(timeout=10)
         erros = [str(t.erro) for t in self._trilhas if t.erro]
         reuniao, arquivos = self.reuniao, self.arquivos
         self.ativo, self.reuniao, self._trilhas, self.trilhas = False, None, [], {}
-        self.pela_extensao = False
+        self.pela_extensao, self._som_do_pc = False, None
         if erros and len(erros) == len(arquivos):
             raise RuntimeError("Falha ao gravar o áudio: " + "; ".join(erros))
         return reuniao, arquivos
@@ -234,6 +267,22 @@ class Gravador:
         trilha = self.trilhas.get("outros")
         if self.ativo and isinstance(trilha, _TrilhaExterna):
             trilha.alimentar(mono)
+
+    def usar_som_do_pc(self, sim: bool) -> bool:
+        """Troca a fonte da trilha "outros" entre a extensão e o som do PC. Devolve se o som do PC está em uso."""
+        trilha = self.trilhas.get("outros")
+        if not (self.ativo and isinstance(trilha, _TrilhaExterna)):
+            return False
+        if sim and self._som_do_pc is None:  # liga uma vez; se falhar, não tenta de novo nesta gravação
+            self._som_do_pc = _SomDoPC(trilha, self._parar)
+            self._som_do_pc.start()
+        trilha.do_pc = sim and self._som_do_pc is not None and self._som_do_pc.erro is None
+        return trilha.do_pc
+
+    @property
+    def usando_som_do_pc(self) -> bool:
+        trilha = self.trilhas.get("outros")
+        return isinstance(trilha, _TrilhaExterna) and trilha.do_pc
 
     def duracao(self) -> str:
         if not self.inicio:

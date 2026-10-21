@@ -580,7 +580,8 @@ EXTENSAO = {"sinal_em": 0.0, "aba": None, "aba_sinal_em": 0.0, "fora_desde": Non
 EXTENSAO_ATIVA_SEG = 30  # sem sinal há mais que isso: extensão ausente, vale o detector antigo
 EXTENSAO_SEM_SINAL_FIM = 20  # gravando e a aba parou de mandar sinal (fechou, Chrome caiu): encerra
 SOM_MINIMO = 0.01  # pico abaixo disso é silêncio
-SOM_MUDO_SEG = 180  # gravando sem nenhum som da chamada por esse tempo: avisa (o som da aba pode ter parado de chegar)
+SOM_PC_SEG = 45  # a extensão sem som por esse tempo: a trilha "outros" passa a gravar o som do PC (alto-falante/fone)
+SOM_MUDO_SEG = 180  # sem som e sem conseguir usar o som do PC por esse tempo: avisa
 _extensao_lock = threading.Lock()
 
 
@@ -612,7 +613,15 @@ def api_extensao_estado():
             EXTENSAO["pico"] = max(EXTENSAO["pico"], pico)
             if pico > SOM_MINIMO:
                 EXTENSAO.update(som_em=agora, mudo_avisado=False)
-            elif em_chamada and agora - EXTENSAO["som_em"] >= SOM_MUDO_SEG and not EXTENSAO["mudo_avisado"]:
+                if GRAVADOR.usando_som_do_pc:
+                    GRAVADOR.usar_som_do_pc(False)
+                    print("[extensao] o som da aba voltou: a trilha dos outros volta a vir da extensão")
+            elif em_chamada and agora - EXTENSAO["som_em"] >= SOM_PC_SEG and not GRAVADOR.usando_som_do_pc:
+                if GRAVADOR.usar_som_do_pc(True):
+                    print(f"[extensao] {SOM_PC_SEG}s sem som da aba: gravando os outros pelo som do PC "
+                          f"(trilhas={d.get('trilhas')})")
+            if (pico <= SOM_MINIMO and em_chamada and not GRAVADOR.usando_som_do_pc
+                    and agora - EXTENSAO["som_em"] >= SOM_MUDO_SEG and not EXTENSAO["mudo_avisado"]):
                 EXTENSAO["mudo_avisado"] = True
                 print(f"[extensao] AVISO: nenhum som da chamada há {SOM_MUDO_SEG // 60} min (trilhas={d.get('trilhas')})")
                 threading.Thread(target=monitor.notificar, daemon=True, args=(
@@ -622,6 +631,7 @@ def api_extensao_estado():
                     f"http://localhost:{config.PORTA}/gravacao")).start()
             if agora - EXTENSAO["log_em"] >= 30:  # diagnóstico: o áudio da aba está chegando?
                 print(f"[extensao] trilhas={d.get('trilhas')} áudio={d.get('audio_ctx')} pico 30s={EXTENSAO['pico']:.3f}"
+                      + (" (gravando pelo som do PC)" if GRAVADOR.usando_som_do_pc else "")
                       + (f" diag={d['diag']}" if isinstance(d.get("diag"), dict) else ""))
                 EXTENSAO["log_em"], EXTENSAO["pico"] = agora, 0.0
             if em_chamada:
@@ -909,6 +919,10 @@ details>summary{cursor:pointer;list-style:none}
 {% if google_caiu %}<form method="post" action="{{ url_for('google_conectar') }}" class="flash" style="display:flex;gap:12px;align-items:center;justify-content:space-between">
 <span>A conexão com o Google caiu (a autorização venceu ou foi revogada). Agenda, atas e sincronização param até reconectar.</span>
 <button>Reconectar Google</button></form>{% endif %}
+{% if drive_cheio %}<div class="flash" style="border-color:var(--err)">O Google Drive está quase cheio:
+{{ '%.1f'|format(drive_cheio[0]) }} de {{ '%.0f'|format(drive_cheio[1]) }} GB usados. Quando encher, as cópias de segurança
+e os vídeos param de ir para lá. Libere espaço apagando vídeos antigos da pasta "{{ pasta_videos }}" ou outros arquivos
+grandes (e esvazie a lixeira do Drive, que também conta).</div>{% endif %}
 {% for pc, quando in pcs_parados %}<form method="post" action="{{ url_for('esquecer_pc') }}" class="flash" style="display:flex;gap:12px;align-items:center;justify-content:space-between">
 <span>O PC <b>{{ pc }}</b> não sincroniza desde {{ quando.astimezone().strftime('%d/%m às %H:%M') }}. Se ele esteve ligado, a sincronização dele está com problema (veja o painel dele, por exemplo a conexão com o Google).</span>
 <input type="hidden" name="pc" value="{{ pc }}"><button class="sec">Não uso mais esse PC</button></form>{% endfor %}
@@ -925,7 +939,8 @@ def pagina(corpo_tpl: str, **ctx):
     css = (config.BASE_DIR / "telas" / "comum.css").read_text(encoding="utf-8")
     return render_template_string(BASE, corpo=corpo, sinc=sincronia.ESTADO, sinc_ligada=config.SINCRONIZAR, css_comum=css,
                                   desatualizado=codigo_mudou(), google_caiu=bool(g.ESTADO["desconectado"]),
-                                  pcs_parados=sincronia.pcs_parados() if config.SINCRONIZAR else [])
+                                  pcs_parados=sincronia.pcs_parados() if config.SINCRONIZAR else [],
+                                  drive_cheio=drive_quase_cheio(), pasta_videos=config.PASTA_VIDEOS)
 
 
 # ---------------------------------------------------------------- painel desatualizado (código novo em disco)
@@ -955,6 +970,18 @@ def _ocupado() -> str | None:
     return None
 
 
+ESPACO_DRIVE = {"usado": 0, "limite": 0}  # bytes, medido de hora em hora
+DRIVE_QUASE_CHEIO = 0.8
+
+
+def drive_quase_cheio() -> tuple[float, float] | None:
+    """(usado, limite) em GB quando o Drive passou de DRIVE_QUASE_CHEIO; senão None."""
+    usado, limite = ESPACO_DRIVE["usado"], ESPACO_DRIVE["limite"]
+    if limite and usado >= DRIVE_QUASE_CHEIO * limite:
+        return usado / 1e9, limite / 1e9
+    return None
+
+
 def copias_de_seguranca() -> None:
     """Cópia do banco ao abrir (se ainda não houver a do dia) e, com o painel aberto, a cada virada de dia;
     as últimas também vão para o Drive."""
@@ -972,6 +999,10 @@ def copias_de_seguranca() -> None:
                     print(f"[copia] {enviadas} cópia(s) enviada(s) ao Drive")
             except Exception as e:
                 print(f"[copia] não consegui enviar ao Drive (tento de novo em 1 hora): {e}")
+            try:
+                ESPACO_DRIVE["usado"], ESPACO_DRIVE["limite"] = g.drive_espaco()
+            except Exception as e:
+                print(f"[copia] não consegui ver o espaço do Drive: {e}")
             try:
                 for nome in sincronia.arquivar_videos(ocupado=lambda: bool(_ocupado())):
                     print(f"[videos] {nome} saiu do PC" + (" (está no Drive)" if config.VIDEOS_NO_DRIVE else ""))
@@ -1378,6 +1409,8 @@ def gravacao():
 {% if automatica %}<p>Gravação automática: ela para sozinha quando você sair da chamada do Meet.</p>{% endif %}
 <p class="mut">Gravando seu microfone e o áudio da chamada. Pode minimizar esta página.
 Use <b>fone de ouvido</b> para a transcrição separar melhor quem falou.</p>
+{% if som_do_pc %}<p class="mut">O som não estava chegando pela extensão do Chrome: a voz dos outros está sendo
+gravada pelo som do PC. Se a extensão voltar, o painel volta a usá-la sozinho.</p>{% endif %}
 {% if som_mudo %}<div class="flash" style="border-color:var(--err)"><b>O som da chamada não está chegando.</b>
 Há mais de {{ som_mudo_min }} minutos a extensão do Chrome não recebe nenhum som dos outros participantes.
 Se eles estão falando, <b>tire o fone e use a caixa de som</b>: assim o microfone capta a conversa e a ata não sai só com o seu lado.</div>{% endif %}
@@ -1406,6 +1439,7 @@ no painel: ao gerar a ata de novo, ela é aproveitada e o áudio não é transcr
         tarefa=tarefa_para_tela(),
         som_mudo=_gravando_pela_extensao() and EXTENSAO["mudo_avisado"],
         som_mudo_min=SOM_MUDO_SEG // 60,
+        som_do_pc=_gravando_pela_extensao() and GRAVADOR.usando_som_do_pc,
     )
 
 
