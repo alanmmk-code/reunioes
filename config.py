@@ -66,3 +66,8 @@ SINCRONIZAR = os.getenv("SINCRONIZAR", "sim").lower() in ("sim", "s", "true", "1
 # Enviar também os áudios (grandes: ~230 MB por hora de reunião). Sem isso, só textos e atas vão para o Drive.
 SINCRONIZAR_AUDIO = os.getenv("SINCRONIZAR_AUDIO", "nao").lower() in ("sim", "s", "true", "1")
 PASTA_DRIVE = os.getenv("PASTA_DRIVE", "Reuniões - dados do app")
+# Vídeos das reuniões (~500 MB por hora): depois de VIDEOS_DIAS dias saem do PC (0 = nunca). Com VIDEOS_NO_DRIVE=sim,
+# antes de apagar vão para a pasta PASTA_VIDEOS do Drive (e só são apagados daqui depois de conferido o tamanho lá)
+VIDEOS_DIAS = int(os.getenv("VIDEOS_DIAS", "0"))
+VIDEOS_NO_DRIVE = os.getenv("VIDEOS_NO_DRIVE", "sim").lower() in ("sim", "s", "true", "1")
+PASTA_VIDEOS = os.getenv("PASTA_VIDEOS", "Reuniões - vídeos")

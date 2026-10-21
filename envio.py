@@ -201,12 +201,38 @@ def enviar_convite(remetente: str, convidados, titulo: str, inicio: datetime, du
     return entry_id
 
 
+def _item_do_convite(ol, entry_id: str):
+    """O item do convite no Outlook. O EntryID vale no PC que enviou; em outro PC (vínculo que veio pela
+    sincronia) procura no calendário da conta que enviou, pelo assunto e pelo horário guardados."""
+    ns = ol.GetNamespace("MAPI")
+    try:
+        return ns.GetItemFromID(entry_id)
+    except Exception:
+        pass
+    convite = next((c for c in _ler().values() if c.get("entry_id") == entry_id), None)
+    if not convite or not convite.get("titulo") or not convite.get("inicio"):
+        raise RuntimeError("Não achei este convite no Outlook deste PC. Faça a alteração pelo PC que enviou o convite "
+                           "ou direto no Outlook.")
+    inicio = datetime.fromisoformat(convite["inicio"])
+    calendario = _calendario_da_conta(ol, _conta(ol, convite["remetente"]))
+    for item in calendario.Items:
+        try:
+            if (item.Subject == convite["titulo"] and item.MeetingStatus == OL_MEETING
+                    and item.Start.strftime("%Y-%m-%dT%H:%M") == inicio.strftime("%Y-%m-%dT%H:%M")):
+                return item
+        except Exception:
+            continue
+    raise RuntimeError(f"Não achei o convite “{convite['titulo']}” de {inicio:%d/%m %H:%M} no Outlook "
+                       f"da conta {convite['remetente']} deste PC (em conta IMAP o calendário fica só no PC que "
+                       "enviou). Faça a alteração pelo PC que enviou o convite ou direto no Outlook dele.")
+
+
 def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo: str | None = None) -> None:
     """Remarca um convite enviado pelo Outlook e manda a atualização aos convidados."""
     _liberado()
 
     def atualizar(ol):
-        item = ol.GetNamespace("MAPI").GetItemFromID(entry_id)
+        item = _item_do_convite(ol, entry_id)
         item.Start = _hora_outlook(inicio)
         item.Duration = int(duracao_min)
         if titulo:
@@ -217,6 +243,7 @@ def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo:
         return (conta.SmtpAddress if conta else remetente_padrao()), item.Subject, [r.Address for r in item.Recipients]
 
     remetente, assunto, para = _no_outlook(atualizar)
+    _anotar_convite(entry_id, titulo=assunto, inicio=_hora_local(inicio))
     _vigiar("atualização de convite", remetente, assunto, para)
 
 
@@ -230,7 +257,7 @@ def incluir_no_convite(entry_id: str, novos) -> None:
         raise ValueError("Informe pelo menos um e-mail válido.")
 
     def incluir(ol):
-        item = ol.GetNamespace("MAPI").GetItemFromID(entry_id)
+        item = _item_do_convite(ol, entry_id)
         for email in para:
             item.Recipients.Add(email)
         item.Recipients.ResolveAll()
@@ -248,7 +275,7 @@ def cancelar_convite(entry_id: str) -> None:
     _liberado()
 
     def cancelar(ol):
-        item = ol.GetNamespace("MAPI").GetItemFromID(entry_id)
+        item = _item_do_convite(ol, entry_id)
         item.MeetingStatus = 5  # olMeetingCanceled
         item.Save()
         item.Send()
@@ -258,6 +285,7 @@ def cancelar_convite(entry_id: str) -> None:
         return dados
 
     remetente, assunto, para = _no_outlook(cancelar)
+    _anotar_convite(entry_id, cancelado=True)
     _vigiar("cancelamento de convite", remetente, assunto, para)
 
 
@@ -348,13 +376,63 @@ def _ler() -> dict:
         return {}
 
 
-def registrar_convite(event_id: str, remetente: str, entry_id: str) -> None:
+def _escrever(dados: dict) -> None:
     import json
 
-    dados = _ler()
-    dados[event_id] = {"remetente": remetente, "entry_id": entry_id, "enviado_em": datetime.now().isoformat(timespec="seconds")}
     _CONVITES.write_text(json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _agora_utc() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _hora_local(inicio) -> str | None:
+    """Horário de parede (como o Outlook mostra), para achar o convite em outro PC."""
+    if not isinstance(inicio, datetime):
+        return None
+    return (inicio.astimezone() if inicio.tzinfo else inicio).strftime("%Y-%m-%dT%H:%M")
+
+
+def registrar_convite(event_id: str, remetente: str, entry_id: str, titulo: str | None = None, inicio=None) -> None:
+    """Guarda o vínculo evento do Google -> convite do Outlook. Vai para os outros PCs pela sincronia, com assunto e
+    horário para eles acharem o mesmo convite no Outlook deles."""
+    dados = _ler()
+    dados[event_id] = {"remetente": remetente, "entry_id": entry_id, "titulo": titulo, "inicio": _hora_local(inicio),
+                       "enviado_em": datetime.now().isoformat(timespec="seconds"), "atualizado_em": _agora_utc()}
+    _escrever(dados)
+
+
+def completar_convite(event_id: str, titulo: str, inicio) -> None:
+    """Vínculo antigo (sem assunto/horário): completa com os dados do evento do Google, antes de mexer no convite."""
+    dados = _ler()
+    c = dados.get(event_id)
+    if c and not (c.get("titulo") and c.get("inicio")) and titulo and _hora_local(inicio):
+        c.update(titulo=titulo, inicio=_hora_local(inicio), atualizado_em=_agora_utc())
+        _escrever(dados)
+
+
+def _anotar_convite(entry_id: str, **campos) -> None:
+    dados = _ler()
+    for c in dados.values():
+        if isinstance(c, dict) and c.get("entry_id") == entry_id:
+            c.update(campos, atualizado_em=_agora_utc())
+    _escrever(dados)
+
+
 def convite_do_evento(event_id: str) -> dict | None:
-    return _ler().get(event_id)
+    c = _ler().get(event_id)
+    return c if isinstance(c, dict) and not c.get("cancelado") else None
+
+
+def mesclar_convites(remoto) -> dict:
+    """Junta os vínculos deste PC com os que vieram do Drive (por evento, vale o alterado por último) e grava."""
+    locais = _ler()
+    for event_id, c in (remoto.items() if isinstance(remoto, dict) else []):
+        if not isinstance(c, dict) or not isinstance(c.get("entry_id"), str):
+            continue
+        meu = locais.get(event_id)
+        quando = lambda x: str(x.get("atualizado_em") or x.get("enviado_em") or "")
+        if not isinstance(meu, dict) or quando(c) > quando(meu):
+            locais[event_id] = c
+    _escrever(locais)
+    return locais

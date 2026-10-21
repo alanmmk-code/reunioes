@@ -44,6 +44,8 @@
   "/perguntar",
   "/reiniciar",
   "/resumo/<event_id>",
+  "/resumo/<event_id>/cliente",
+  "/resumo/<event_id>/consultor",
   "/reuniao/<event_id>/cancelar",
   "/reuniao/<event_id>/convidar",
   "/reuniao/<event_id>/remarcar",

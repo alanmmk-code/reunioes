@@ -194,6 +194,7 @@ g.criar_google_doc = lambda titulo, html: "https://docs.google.com/document/d/" 
 DOCS_ATUALIZADOS = []  # (link, titulo) de cada atualizar_google_doc
 g.atualizar_google_doc = lambda link, titulo, html: (DOCS_ATUALIZADOS.append((link, titulo)),
                                                      link if g.id_do_link(link) else g.criar_google_doc(titulo, html))[1]
+g.doc_modificado_em = lambda link: None  # o doc falso nunca e alterado fora do painel
 LIXEIRA = []
 g.drive_lixeira = lambda fid: LIXEIRA.append(fid)
 g.buscar_transcricao = lambda r: ("texto da transcricao", "falso")

@@ -387,6 +387,15 @@ def criar_google_doc(titulo: str, html: str) -> str:
     return arquivo["webViewLink"]
 
 
+def doc_modificado_em(link: str) -> datetime | None:
+    """Quando o Google Doc foi alterado pela última vez (por qualquer pessoa), ou None se não houver doc."""
+    file_id = id_do_link(link)
+    if not file_id:
+        return None
+    texto = _svc("drive", "v3").files().get(fileId=file_id, fields="modifiedTime").execute()["modifiedTime"]
+    return datetime.fromisoformat(texto.replace("Z", "+00:00"))
+
+
 def atualizar_google_doc(link: str, titulo: str, html: str) -> str:
     """Troca o conteúdo (e o nome) do Google Doc pelo HTML, mantendo o mesmo link. Sem doc válido, cria um."""
     file_id = id_do_link(link)
@@ -431,6 +440,20 @@ def drive_listar(pasta_id: str) -> dict[str, dict]:
         token = resp.get("nextPageToken")
         if not token:
             return arquivos
+
+
+def drive_tamanhos(pasta_id: str) -> dict[str, set[int]]:
+    """Arquivos da pasta: nome -> tamanhos em bytes (para conferir um envio antes de apagar o original)."""
+    drive, tamanhos, token = _svc("drive", "v3"), {}, None
+    while True:
+        resp = drive.files().list(q=f"'{pasta_id}' in parents and trashed = false",
+                                  fields="nextPageToken, files(name, size)", pageSize=1000, pageToken=token).execute()
+        for f in resp.get("files", []):
+            if "size" in f:
+                tamanhos.setdefault(f["name"], set()).add(int(f["size"]))
+        token = resp.get("nextPageToken")
+        if not token:
+            return tamanhos
 
 
 def drive_enviar(pasta_id: str, nome: str, conteudo: bytes | None = None, caminho=None,

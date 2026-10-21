@@ -130,7 +130,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                     try:
                         entry = envio.enviar_convite(remetente, convidados, titulo, inicio, duracao,
                                                      criado.get("link_meet"), pauta)
-                        envio.registrar_convite(criado["id"], remetente, entry)
+                        envio.registrar_convite(criado["id"], remetente, entry, titulo, inicio)
                     except Exception as erro:
                         flash(f"A reunião foi criada no Google Agenda, mas o convite pelo Outlook falhou: {erro}")
                         raise
@@ -195,9 +195,10 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                 titulo = request.form.get("titulo", "").strip() or None
                 novo_titulo = titulo if titulo != e["titulo"] else None
                 convite = envio.convite_do_evento(event_id)
-                if convite:  # convite saiu pelo Outlook: Google sem e-mail, atualização pelo Outlook
-                    g.remarcar_evento(event_id, novo_inicio, duracao, novo_titulo, avisar=False)
+                if convite:  # convite saiu pelo Outlook: atualização pelo Outlook (antes: se falhar, nada muda), Google sem e-mail
+                    envio.completar_convite(event_id, e["titulo"], datetime.fromisoformat(e["inicio"]))
                     envio.atualizar_convite(convite["entry_id"], novo_inicio, duracao, novo_titulo)
+                    g.remarcar_evento(event_id, novo_inicio, duracao, novo_titulo, avisar=False)
                 else:
                     g.remarcar_evento(event_id, novo_inicio, duracao, novo_titulo)
                 flash(f"Reunião remarcada para {novo_inicio:%d/%m às %H:%M}"
@@ -228,6 +229,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
         try:
             convite = envio.convite_do_evento(event_id)
             if convite:  # convite saiu pelo Outlook: o cancelamento vai por ele; o Google não manda outro e-mail
+                envio.completar_convite(event_id, e["titulo"], datetime.fromisoformat(e["inicio"]))
                 envio.cancelar_convite(convite["entry_id"])
                 g.cancelar_evento(event_id, avisar=False)
             else:
@@ -267,6 +269,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                 try:
                     convite = envio.convite_do_evento(event_id)
                     if convite:  # convite saiu pelo Outlook: os novos recebem por ele; o Google não manda outro e-mail
+                        envio.completar_convite(event_id, e["titulo"], datetime.fromisoformat(e["inicio"]))
                         envio.incluir_no_convite(convite["entry_id"], novos)
                         g.incluir_convidados(event_id, novos, avisar=False)
                     else:

@@ -100,7 +100,7 @@ chrome.runtime.onConnect.addListener((porta) => {
   porta.onMessage.addListener((m) => {
     if (m.tipo === "estado") {
       titulo = m.titulo || titulo;
-      estado(aba, m.em_chamada, titulo, m.fim, { trilhas: m.trilhas, pico: m.pico, audio_ctx: m.audio_ctx });
+      estado(aba, m.em_chamada, titulo, m.fim, { trilhas: m.trilhas, pico: m.pico, audio_ctx: m.audio_ctx, diag: m.diag });
       const antes = emChamada.get(aba) || false;
       if (m.em_chamada !== antes) {
         emChamada.set(aba, m.em_chamada);

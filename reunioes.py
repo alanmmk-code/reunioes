@@ -576,9 +576,11 @@ def ao_encerrar_meet() -> str | None:
 # dos outros participantes. Com ela, a gravação começa e termina pela chamada de verdade, e a trilha
 # "outros" tem só o som da reunião (nada de outras abas ou programas).
 EXTENSAO = {"sinal_em": 0.0, "aba": None, "aba_sinal_em": 0.0, "fora_desde": None, "log_em": 0.0, "pico": 0.0,
-            "telas": {}, "telas_inicio": {}}  # telas: aba -> vídeo da aba (gravação da tela); quando começou
+            "telas": {}, "telas_inicio": {}, "som_em": 0.0, "mudo_avisado": False}  # telas: aba -> vídeo da aba (gravação da tela); quando começou
 EXTENSAO_ATIVA_SEG = 30  # sem sinal há mais que isso: extensão ausente, vale o detector antigo
 EXTENSAO_SEM_SINAL_FIM = 20  # gravando e a aba parou de mandar sinal (fechou, Chrome caiu): encerra
+SOM_MINIMO = 0.01  # pico abaixo disso é silêncio
+SOM_MUDO_SEG = 180  # gravando sem nenhum som da chamada por esse tempo: avisa (o som da aba pode ter parado de chegar)
 _extensao_lock = threading.Lock()
 
 
@@ -604,11 +606,23 @@ def api_extensao_estado():
                 return {"ok": True, "gravando": False}  # outra aba do Meet: ignora
             EXTENSAO["aba_sinal_em"] = agora
             try:
-                EXTENSAO["pico"] = max(EXTENSAO["pico"], float(d.get("pico") or 0))
+                pico = float(d.get("pico") or 0)
             except (TypeError, ValueError):
-                pass
+                pico = 0.0
+            EXTENSAO["pico"] = max(EXTENSAO["pico"], pico)
+            if pico > SOM_MINIMO:
+                EXTENSAO.update(som_em=agora, mudo_avisado=False)
+            elif em_chamada and agora - EXTENSAO["som_em"] >= SOM_MUDO_SEG and not EXTENSAO["mudo_avisado"]:
+                EXTENSAO["mudo_avisado"] = True
+                print(f"[extensao] AVISO: nenhum som da chamada há {SOM_MUDO_SEG // 60} min (trilhas={d.get('trilhas')})")
+                threading.Thread(target=monitor.notificar, daemon=True, args=(
+                    "Som da chamada não está sendo gravado",
+                    f"Há {SOM_MUDO_SEG // 60} min não chega som dos outros participantes. Se eles estão falando, "
+                    "use a caixa de som (sem fone) para o microfone captar.",
+                    f"http://localhost:{config.PORTA}/gravacao")).start()
             if agora - EXTENSAO["log_em"] >= 30:  # diagnóstico: o áudio da aba está chegando?
-                print(f"[extensao] trilhas={d.get('trilhas')} áudio={d.get('audio_ctx')} pico 30s={EXTENSAO['pico']:.3f}")
+                print(f"[extensao] trilhas={d.get('trilhas')} áudio={d.get('audio_ctx')} pico 30s={EXTENSAO['pico']:.3f}"
+                      + (f" diag={d['diag']}" if isinstance(d.get("diag"), dict) else ""))
                 EXTENSAO["log_em"], EXTENSAO["pico"] = agora, 0.0
             if em_chamada:
                 EXTENSAO["fora_desde"] = None
@@ -620,7 +634,7 @@ def api_extensao_estado():
                     return {"ok": True, "gravando": False}
             return {"ok": True, "gravando": True}
         if em_chamada and not GRAVADOR.ativo:
-            EXTENSAO.update(aba=aba, aba_sinal_em=agora, fora_desde=None)
+            EXTENSAO.update(aba=aba, aba_sinal_em=agora, fora_desde=None, som_em=agora, mudo_avisado=False)
             ao_detectar_meet(titulo, pela_extensao=True)
             return {"ok": True, "gravando": GRAVADOR.ativo and GRAVADOR.pela_extensao}
     return {"ok": True, "gravando": False}
@@ -958,6 +972,11 @@ def copias_de_seguranca() -> None:
                     print(f"[copia] {enviadas} cópia(s) enviada(s) ao Drive")
             except Exception as e:
                 print(f"[copia] não consegui enviar ao Drive (tento de novo em 1 hora): {e}")
+            try:
+                for nome in sincronia.arquivar_videos(ocupado=lambda: bool(_ocupado())):
+                    print(f"[videos] {nome} saiu do PC" + (" (está no Drive)" if config.VIDEOS_NO_DRIVE else ""))
+            except Exception as e:
+                print(f"[videos] não consegui arquivar (tento de novo em 1 hora): {e}")
             time.sleep(3600)
     threading.Thread(target=loop, daemon=True, name="copias").start()
 
@@ -1095,7 +1114,9 @@ def inicio():
         return pagina(
             "<h1>Conecte sua conta Google</h1><p>{{ erro }}</p>"
             "<form method='post' action='{{ url_for(\"google_conectar\") }}'><button>Conectar Google</button></form>"
-            "<p class='mut'>Ou rode <code>python reunioes.py login</code> no terminal e recarregue esta página.</p>",
+            "<p class='mut'>Se o botão não abrir o login, rode na pasta do painel "
+            "<code>.venv\\Scripts\\python.exe reunioes.py login</code> e recarregue esta página "
+            "(só <code>python</code> pode abrir a Microsoft Store em vez do Python do painel).</p>",
             erro=str(e),
         )
     g.anotar_conexao()
@@ -1357,6 +1378,9 @@ def gravacao():
 {% if automatica %}<p>Gravação automática: ela para sozinha quando você sair da chamada do Meet.</p>{% endif %}
 <p class="mut">Gravando seu microfone e o áudio da chamada. Pode minimizar esta página.
 Use <b>fone de ouvido</b> para a transcrição separar melhor quem falou.</p>
+{% if som_mudo %}<div class="flash" style="border-color:var(--err)"><b>O som da chamada não está chegando.</b>
+Há mais de {{ som_mudo_min }} minutos a extensão do Chrome não recebe nenhum som dos outros participantes.
+Se eles estão falando, <b>tire o fone e use a caixa de som</b>: assim o microfone capta a conversa e a ata não sai só com o seu lado.</div>{% endif %}
 <form method="post" action="{{ url_for('parar') }}" data-espera="Parando…"><button>■ Parar e gerar ata</button></form>
 {% elif tarefa.ativa %}<meta http-equiv="refresh" content="3">
 <h1>⏳ {{ tarefa.etapa }}…</h1>{% if tarefa.titulo %}<p><b>{{ tarefa.titulo }}</b></p>{% endif %}
@@ -1380,6 +1404,8 @@ no painel: ao gerar a ata de novo, ela é aproveitada e o áudio não é transcr
         titulo=(GRAVADOR.reuniao or {}).get("titulo", ""),
         duracao=GRAVADOR.duracao(),
         tarefa=tarefa_para_tela(),
+        som_mudo=_gravando_pela_extensao() and EXTENSAO["mudo_avisado"],
+        som_mudo_min=SOM_MUDO_SEG // 60,
     )
 
 
@@ -1520,6 +1546,10 @@ def ata_editar(event_id):
     if request.method == "POST":
         antiga = analisador.Ata.model_validate(reg["ata"])
         ata = ata_do_formulario(reg["ata"])
+        mexido = _doc_mexido(reg)
+        if mexido and request.form.get("substituir") != "1":
+            # o Google Doc foi alterado fora do painel: não sobrescreve sem confirmar (e não perde o que foi digitado)
+            return _tela_editar(event_id, ata.model_dump(), mexido)
         reg["ata"] = ata.model_dump()
         atas.salvar(event_id, reg)  # salva antes do Google: a edição não se perde se o Drive falhar
         saiu, entrou = db.atualizar_acoes_da_ata(reg["reuniao"], antiga.acoes, ata, reg.get("cliente_id"))
@@ -1530,15 +1560,48 @@ def ata_editar(event_id):
             data = reg["reuniao"].get("inicio", "")[:10]
             reg["doc_link"] = g.atualizar_google_doc(reg.get("doc_link", ""), f"Ata - {ata.titulo} - {data}",
                                                      atas.para_html(ata, reg["reuniao"]))
+            try:  # marca de quando o painel salvou: alteração no Docs depois disso é de alguém, e o painel avisa
+                salvo = g.doc_modificado_em(reg["doc_link"])
+                reg["doc_salvo_em"] = salvo.isoformat() if salvo else None
+            except Exception:
+                pass
             atas.salvar(event_id, reg)
             msg += " Google Doc atualizado."
         except Exception as e:
             msg += f" Não consegui atualizar o Google Doc ({e}); tente salvar de novo."
         flash(msg)
         return redirect(url_for("ver_ata", event_id=event_id))
-    a = reg["ata"]
+    try:
+        mexido = _doc_mexido(reg)
+    except Exception:
+        mexido = None
+    return _tela_editar(event_id, reg["ata"], mexido)
+
+
+def _doc_mexido(reg: dict) -> "datetime | None":
+    """Se o Google Doc da ata foi alterado fora do painel (depois da última vez que o painel o gravou), devolve
+    quando; senão None. Sem marca guardada (ata antiga), compara com a hora em que a ata foi gerada."""
+    try:
+        alterado = g.doc_modificado_em(reg.get("doc_link", ""))
+    except Exception:
+        return None  # sem Google agora: não dá para saber, não bloqueia
+    if not alterado:
+        return None
+    try:
+        base = datetime.fromisoformat(reg.get("doc_salvo_em") or reg.get("gerada_em") or "")
+    except ValueError:
+        return None
+    base = base if base.tzinfo else base.astimezone()
+    return alterado if alterado > base + timedelta(minutes=3) else None
+
+
+def _tela_editar(event_id: str, a: dict, mexido):
     return pagina(
         """<h1>Editar ata</h1>
+{% if mexido %}<div class="flash" style="border-color:var(--warn)"><b>Atenção:</b> o Google Doc desta ata foi alterado
+direto no Google Docs em {{ mexido.astimezone().strftime('%d/%m às %H:%M') }}, depois da última vez que o painel o gravou.
+Salvar daqui <b>substitui o documento inteiro</b> e essas alterações se perdem.
+<a href="{{ doc_link }}" target="_blank">Abra o documento</a> e copie para cá o que quiser manter.</div>{% endif %}
 <p class="mut">Ao salvar, o Google Doc da ata é refeito com este conteúdo (o link continua o mesmo).
 Alterações feitas direto no Google Docs são substituídas. Ações novas viram tarefas; ações apagadas saem das tarefas (as já feitas ficam).</p>
 <form method="post" data-espera="Salvando…">
@@ -1565,9 +1628,11 @@ Alterações feitas direto no Google Docs são substituídas. Ações novas vira
 <p><label><input type="checkbox" style="width:auto" name="prox_combinada" value="1"{% if a.proxima_reuniao.combinada %} checked{% endif %}> Foi combinada</label></p>
 <p><input type="datetime-local" name="prox_data" value="{{ a.proxima_reuniao.data_hora }}"></p>
 <p><b>Pauta</b> <span class="mut">(um item por linha)</span><br><textarea name="prox_pauta" rows="4">{{ a.proxima_reuniao.pauta|join('\\n') }}</textarea></p></div>
+{% if mexido %}<p><label><input type="checkbox" style="width:auto" name="substituir" value="1" required>
+Entendi: substituir o Google Doc e perder o que foi alterado direto nele</label></p>{% endif %}
 <p><button>Salvar e atualizar o Google Doc</button> <a class="btn sec" href="{{ url_for('ver_ata', event_id=event_id) }}">Cancelar</a></p>
 </form>""",
-        a=a, event_id=event_id,
+        a=a, event_id=event_id, mexido=mexido, doc_link=(atas.carregar(event_id) or {}).get("doc_link", ""),
     )
 
 
@@ -1603,7 +1668,7 @@ def followup(event_id):
             remetente = request.form.get("remetente") or envio.remetente_padrao()
             entry = envio.enviar_convite(remetente, convidados, request.form["titulo"], inicio, duracao,
                                          reg["followup"].get("link_meet"), descricao)
-            envio.registrar_convite(reg["followup"]["id"], remetente, entry)
+            envio.registrar_convite(reg["followup"]["id"], remetente, entry, request.form["titulo"], inicio)
             flash(f"Reunião agendada e convite enviado de {remetente}.")
         else:
             flash("Reunião agendada (sem convidados).")

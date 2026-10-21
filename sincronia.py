@@ -2,6 +2,7 @@
 
 O que vai para o Drive (pasta "Reuniões - dados do app"):
 - dados.json            clientes e tarefas (mesclados registro a registro: vale a alteração mais recente)
+- convites.json         qual convite do Outlook é de qual evento do Google (por evento, vale o mais recente)
 - ata__<id>.json        uma ata por arquivo (vale a versão mais recente)
 - grav__<nome>.json     gravações aguardando a decisão "Gerar ata?"
 - grav__<nome>.txt      transcrições das gravações
@@ -145,6 +146,23 @@ def _sincronizar() -> str:
                        file_id=remoto_dados["id"] if remoto_dados else None)
         enviados += 1
 
+    # 1b) Vínculos evento do Google -> convite do Outlook: sem eles, remarcar/cancelar em outro PC iria pelo Google
+    #     e os convidados ficariam com dois convites
+    import envio
+    remoto_conv = remotos.get("convites.json")
+    texto_conv_remoto = None
+    if remoto_conv:
+        texto_conv_remoto = g.drive_baixar(remoto_conv["id"]).decode("utf-8")
+        try:
+            envio.mesclar_convites(json.loads(texto_conv_remoto))
+        except ValueError:
+            pass  # arquivo remoto estragado: o deste PC o substitui
+    texto_conv = json.dumps(envio._ler(), ensure_ascii=False, sort_keys=True)
+    if texto_conv != texto_conv_remoto and texto_conv != "{}":
+        g.drive_enviar(pasta, "convites.json", texto_conv.encode("utf-8"),
+                       file_id=remoto_conv["id"] if remoto_conv else None)
+        enviados += 1
+
     # 2) Atas: a versão mais recente vence
     locais = {f"ata__{p.stem}.json": p for p in config.ATAS_DIR.glob("*.json")}
     for nome in (set(locais) | {n for n in remotos if n.startswith("ata__")}) - set(lista):
@@ -283,6 +301,34 @@ def enviar_copias(manter: int = 7) -> int:
         if velha in remotos:
             g.drive_apagar(remotos[velha]["id"])
     return enviadas
+
+
+def arquivar_videos(ocupado=lambda: False) -> list[str]:
+    """Tira do PC os vídeos de reunião com mais de VIDEOS_DIAS dias (são grandes). Com VIDEOS_NO_DRIVE, cada um vai
+    antes para a pasta de vídeos do Drive e só é apagado daqui se o tamanho lá conferir. Devolve os nomes tirados."""
+    if config.VIDEOS_DIAS <= 0:
+        return []
+    limite = time.time() - config.VIDEOS_DIAS * 86400
+    velhos = sorted(p for p in config.GRAVACOES_DIR.glob("*.webm")
+                    if not p.stem.endswith("-tela") and "-tela-" not in p.stem and p.stat().st_mtime < limite)
+    if not velhos:
+        return []
+    tirados = []
+    pasta = g.drive_pasta(config.PASTA_VIDEOS) if config.VIDEOS_NO_DRIVE else None
+    for video in velhos:
+        if ocupado():  # não disputa disco/rede com gravação ou ata em andamento; continua na próxima rodada
+            break
+        if pasta:
+            no_drive = g.drive_tamanhos(pasta)
+            if video.stat().st_size not in no_drive.get(video.name, ()):
+                g.drive_enviar(pasta, video.name, caminho=video, mimetype="video/webm")
+                no_drive = g.drive_tamanhos(pasta)
+            if video.stat().st_size not in no_drive.get(video.name, ()):
+                print(f"[videos] {video.name}: tamanho no Drive não confere; fica no PC")
+                continue
+        video.unlink()
+        tirados.append(video.name)
+    return tirados
 
 
 def agendar(atraso: float = 8) -> None:
