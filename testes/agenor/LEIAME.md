@@ -59,3 +59,9 @@ atravessa mudanca de `acoes.py` (o corpus carimba o catalogo e avisa).
 
 ## Corpus
 `sementes/` = regressao (so o que ja foi consertado). `sementes/abertos/` = achado verdadeiro ainda sem decisao.
+
+## O que o Agenor nao ve: o Outlook de verdade
+
+O Agenor simula o Outlook (nada sai de verdade), entao confere so a ordem que o painel da, nao o que o Outlook
+manda. Mudou algo em `envio.py` que mexe em convite? Rode a mao o teste real, so entre contas suas:
+`.venv\Scripts\python.exe testes\outlook_real\incluir_convidado.py ORGANIZADOR CONVIDADO NOVO`.

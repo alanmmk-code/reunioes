@@ -240,7 +240,8 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
 
     @app.route("/reuniao/<event_id>/convidar", methods=["GET", "POST"])
     def convidar_reuniao(event_id):
-        """Inclui pessoas numa reunião já marcada; só as novas recebem o convite."""
+        """Inclui pessoas numa reunião já marcada: as novas recebem o convite (pelo Outlook, quem já estava recebe
+        uma atualização)."""
         voltar = request.values.get("voltar") or url_for("inicio")
         if not voltar.startswith("/") or voltar.startswith("//") or "\\" in voltar or not voltar.isprintable():
             voltar = url_for("inicio")
@@ -273,7 +274,9 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                 except Exception as erro:
                     flash(f"Não consegui convidar: {erro}")
                 else:
-                    flash(f"Convite enviado para {', '.join(novos)}. Quem já estava convidado não recebeu nada de novo.")
+                    flash(f"Convite enviado para {', '.join(novos)}."
+                          + (" Quem já estava convidado recebeu uma atualização do convite (não um cancelamento)."
+                             if convite else ""))
                     return redirect(voltar)
         return pagina(_tela("convidar.html"), e=e, voltar=voltar, texto=texto)
 

@@ -221,31 +221,21 @@ def atualizar_convite(entry_id: str, inicio: datetime, duracao_min: int, titulo:
 
 
 def incluir_no_convite(entry_id: str, novos) -> None:
-    """Inclui convidados num convite já enviado pelo Outlook e manda o convite só para eles
-    (quem já estava fica com Sendable desligado durante o envio e é religado logo depois)."""
+    """Inclui convidados num convite já enviado pelo Outlook: os novos recebem o convite e quem já estava recebe
+    uma atualização. Não desligar o Sendable de quem já estava: o Outlook trata como removido e manda
+    "Cancelado" para essas pessoas (aconteceu com a Reunião Camisetaria - Linx em 20/10)."""
     _liberado()
     para = _destinos(novos)
     if not para:
         raise ValueError("Informe pelo menos um e-mail válido.")
 
     def incluir(ol):
-        mapi = ol.GetNamespace("MAPI")
-        item = mapi.GetItemFromID(entry_id)
-        antigos = [item.Recipients.Item(i) for i in range(1, item.Recipients.Count + 1)]
-        for r in antigos:
-            r.Sendable = False
+        item = ol.GetNamespace("MAPI").GetItemFromID(entry_id)
         for email in para:
             item.Recipients.Add(email)
         item.Recipients.ResolveAll()
-        try:
-            item.Save()
-            item.Send()
-        finally:
-            # religa todo mundo: a próxima remarcação ou cancelamento tem que chegar a todos
-            item = mapi.GetItemFromID(entry_id)
-            for i in range(1, item.Recipients.Count + 1):
-                item.Recipients.Item(i).Sendable = True
-            item.Save()
+        item.Save()
+        item.Send()
         conta = item.SendUsingAccount
         return (conta.SmtpAddress if conta else remetente_padrao()), item.Subject
 
