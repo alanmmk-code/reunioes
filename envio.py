@@ -424,6 +424,17 @@ def convite_do_evento(event_id: str) -> dict | None:
     return c if isinstance(c, dict) and not c.get("cancelado") else None
 
 
+def _quando_convite(c: dict) -> datetime:
+    """Última alteração do vínculo, comparável: atualizado_em é UTC; enviado_em (vínculos antigos) é hora local."""
+    for campo in ("atualizado_em", "enviado_em"):
+        try:
+            quando = datetime.fromisoformat(str(c.get(campo) or ""))
+        except ValueError:
+            continue
+        return quando if quando.tzinfo else quando.astimezone()
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def mesclar_convites(remoto) -> dict:
     """Junta os vínculos deste PC com os que vieram do Drive (por evento, vale o alterado por último) e grava."""
     locais = _ler()
@@ -431,8 +442,7 @@ def mesclar_convites(remoto) -> dict:
         if not isinstance(c, dict) or not isinstance(c.get("entry_id"), str):
             continue
         meu = locais.get(event_id)
-        quando = lambda x: str(x.get("atualizado_em") or x.get("enviado_em") or "")
-        if not isinstance(meu, dict) or quando(c) > quando(meu):
+        if not isinstance(meu, dict) or _quando_convite(c) > _quando_convite(meu):
             locais[event_id] = c
     _escrever(locais)
     return locais

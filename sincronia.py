@@ -321,7 +321,10 @@ def arquivar_videos(ocupado=lambda: False) -> list[str]:
         if pasta:
             no_drive = g.drive_tamanhos(pasta)
             if video.stat().st_size not in no_drive.get(video.name, ()):
-                g.drive_enviar(pasta, video.name, caminho=video, mimetype="video/webm")
+                # envio anterior incompleto: substitui o mesmo arquivo em vez de acumular cópias a cada hora
+                anterior = g.drive_listar(pasta).get(video.name) if video.name in no_drive else None
+                g.drive_enviar(pasta, video.name, caminho=video, mimetype="video/webm",
+                               file_id=anterior["id"] if anterior else None)
                 no_drive = g.drive_tamanhos(pasta)
             if video.stat().st_size not in no_drive.get(video.name, ()):
                 print(f"[videos] {video.name}: tamanho no Drive não confere; fica no PC")

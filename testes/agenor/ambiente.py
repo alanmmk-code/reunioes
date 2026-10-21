@@ -320,3 +320,22 @@ def novo_mundo(semente):
 
 def limpar():
     shutil.rmtree(TMP, ignore_errors=True)
+
+
+_ENVIO_REAL = {"m": None}
+
+
+def envio_real():
+    """Uma SEGUNDA copia de envio.py (funcoes originais) para testar as funcoes puras de vinculo de convite
+    (registrar/completar/convite_do_evento/mesclar), que `_bloquear_envio` troca por falsas no modulo `envio`.
+    Continua bloqueada para o Outlook: o win32com/pythoncom do sys.modules sao os falsos que levantam, e
+    `_liberado()` recusa o banco de teste. Quem usa deve apontar `_CONVITES` para um arquivo dentro de TMP."""
+    if _ENVIO_REAL["m"] is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("envio_real_agenor", str(ALVO / "envio.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert sys.modules["win32com.client"].Dispatch is _dispatch_bloqueado
+        mod._CONVITES = TMP / "convites_real.json"
+        _ENVIO_REAL["m"] = mod
+    return _ENVIO_REAL["m"]
