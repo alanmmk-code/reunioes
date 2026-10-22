@@ -214,7 +214,15 @@ LIXO_CONVITE = [None, 5, "texto", [], ["E1"], {}, {"entry_id": 5}, {"entry_id": 
 
 
 def _quando(c):
-    return str(c.get("atualizado_em") or c.get("enviado_em") or "")
+    """atualizado_em e UTC; enviado_em (vinculo antigo) e hora LOCAL sem fuso: comparar como texto erra fora do UTC
+    (10:00 em Brasilia e depois de 10:00 UTC). Data que nao se le passa para o campo seguinte; nenhuma = a mais antiga."""
+    for campo in ("atualizado_em", "enviado_em"):
+        try:
+            q = datetime.fromisoformat(str(c.get(campo) or ""))
+        except ValueError:
+            continue
+        return q if q.tzinfo else q.astimezone()
+    return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _dicionario(r, n, lixo):

@@ -34,8 +34,11 @@ desfaz, idempotente), H1..H4 (hostis), R1/R2 (rota estoura / 5xx).
 `v1` = acoes.py, `v2` = v1 + acoes2.py (clientes/sincronia), `v3` = v2 + acoes3.py (pessoas dos clientes, remarcar,
 envios presos no Outlook, extensao sem gravacao), `v4` = v3 + acoes4.py (excluir cliente e recadastrar), `v5` = v4 + acoes5.py (POST de outro site, DNS rebinding), `v6` = v5 + acoes6.py (copias de seguranca: voltar e desfazer;
 "Reconectar Google"; aviso de PC parado; sinal de vida hostil no Drive), `v7` = v6 + acoes7.py (som mudo da extensao, vinculos de
-convite do Outlook entre PCs, editar ata com o Doc alterado fora do painel, arquivar videos antigos), `v8` = v7 + acoes8.py (som do PC no lugar da extensao). Cada um CONGELADO quando o
-seguinte nasce: acao nova vai num catalogo novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v8.
+convite do Outlook entre PCs, editar ata com o Doc alterado fora do painel, arquivar videos antigos), `v8` = v7 + acoes8.py (som do PC no lugar da extensao), `v9` = v8 + acoes9.py (cliente fixado e consultor por reuniao). Cada um CONGELADO quando o
+seguinte nasce: acao nova vai num catalogo novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v9.
+Conserto de ORACULO ou de gerador que estourava (sem mudar o sorteio de passos nem o consumo do `random`) pode entrar num catalogo
+congelado: o passeio continua o mesmo, e os carimbos do corpus sao refeitos (2026-10-22: `_quando` do I49 lendo enviado_em como hora
+local, em acoes7.py; tarefa hostil que nao e dict em acoes2.py).
 Propriedades do v6: I30/I31 (voltar para copia reproduz tarefas/notas/clientes da copia e nao perde o criado depois), I32 (a copia
 "antes de voltar" desfaz), I33 (nome de copia hostil nao muda nada), I34/I35 (aviso e login do Google, sem login duplo), I36/I37
 (aviso de PC parado, escapado; esquecer PC), H6 (sinal de vida com appProperties estranhos), I38 (cancelar reuniao: so o organizador;
@@ -69,6 +72,12 @@ Mutantes (copias em AGENOR_ALVO, nunca no codigo real) que o I53 pega: troca com
 `_SomDoPC.erro`; aviso mudo sem a condicao do som do PC; `start()` antigo (WAV aberto na thread); nao voltar para a extensao; tentar de
 novo apos falha; sem preencher buraco; tela sempre dizendo som do PC; trocar fora de chamada. Para refazer: copie os *.py para uma pasta,
 mude uma linha e rode com `AGENOR_ALVO=<pasta>` (o passeio so da acao: filtre os indices por `N.escolher(...)[0].nome`).
+Propriedades do v9 (commit f25e25c): I54 (cliente fixado: POST /resumo/<id>/cliente grava `cliente_uuid` no evento; vale sobre a
+sugestao automatica em `reunioes.sugerir_cliente`, `clientes.clientes_das_reunioes` e no cartao da agenda; segue a uniao de clientes;
+'nenhum'/id hostil volta ao automatico; cliente excluido nao vale; evento inexistente nao grava; nunca avisa ninguem; a funcao real de
+google_services roda contra um `_SvcFalso` e cobra sendUpdates="none" e a leitura de extendedProperties lixo), I55 (consultor: espacos
+normalizados, <= 80, vazio apaga, escapado no painel e no /resumo; `consultores_conhecidos` sem repetir por caixa/acento e do mais usado
+ao menos; /reuniao/nova leva o consultor ao `agendar_followup`). Mutantes pegos: `sugerir_cliente` ignorando o fixado; rota sem normalizar.
 Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
 certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
 S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).

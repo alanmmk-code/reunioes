@@ -111,6 +111,10 @@ subprocess.check_output = _bloqueio_proc
 ia.gerar = lambda *a, **k: (FALTANDO.add("ia.gerar"), (_ for _ in ()).throw(RedeBloqueada("ia.gerar bloqueado")))[1]
 
 
+DEFINIR_CLIENTE_REAL = g.definir_cliente_do_evento  # a acao I48 roda o de verdade contra um _svc falso (confere sendUpdates)
+DEFINIR_CONSULTOR_REAL = g.definir_consultor_do_evento
+AGENDAR_REAL = g.agendar_followup
+EVENTOS_REAL = g._eventos  # idem para a leitura de extendedProperties
 # tudo o que e publico em google_services vira bloqueio (menos as funcoes puras, sem rede); a agenda ganha um falso
 for _n in dir(g):
     if not _n.startswith("_") and _n not in ("id_do_link", "anotar_conexao", "autorizacao_vencida") and callable(getattr(g, _n)) and getattr(getattr(g, _n), "__module__", "") == g.__name__:
@@ -149,12 +153,12 @@ def _evento(i, dias, meet=True, dia_inteiro=False):
     if dia_inteiro:
         return {"id": f"ev{i}", "titulo": f"Dia {i}", "descricao": "", "local": "", "inicio": ini.date().isoformat(),
                 "fim": (ini.date() + timedelta(days=1)).isoformat(), "dia_inteiro": True, "link": None,
-                "link_agenda": None, "codigo_meet": None, "participantes": [], "anexos": [], "ja_terminou": False}
+                "link_agenda": None, "codigo_meet": None, "participantes": [], "anexos": [], "ja_terminou": False, "cliente_uuid": None, "consultor": ""}
     return {"id": f"ev{i}", "titulo": f"Reuniao {i}", "descricao": "pauta<br>x", "local": "", "inicio": ini.isoformat(),
             "fim": (ini + timedelta(hours=1)).isoformat(), "dia_inteiro": False,
             "link": "https://meet.example/abc" if meet else None, "link_agenda": None, "codigo_meet": "abc",
             "participantes": [{"email": "a@x.com", "nome": "A", "resposta": ""}], "anexos": [],
-            "ja_terminou": dias < 0, "organizador": i % 2 == 1}
+            "ja_terminou": dias < 0, "organizador": i % 2 == 1, "cliente_uuid": None, "consultor": ""}
 
 
 def _listar_eventos(ini, fim):
@@ -214,6 +218,30 @@ def _incluir_convidados(event_id, emails, avisar=True):
 
 
 g.incluir_convidados = _incluir_convidados
+DEFINIDOS = []  # (event_id, cliente_uuid) de cada definir_cliente_do_evento
+
+
+def _definir_cliente_do_evento(event_id, cliente_uuid):
+    e = next((x for x in EVENTOS if x["id"] == event_id), None)
+    if not e:
+        raise RuntimeError("evento nao existe")  # o Google responderia 404
+    DEFINIDOS.append((event_id, cliente_uuid))
+    e["cliente_uuid"] = cliente_uuid or None  # o real grava "" e a leitura devolve None
+
+
+g.definir_cliente_do_evento = _definir_cliente_do_evento
+DEFINIDOS_CONSULTOR = []  # (event_id, consultor) de cada definir_consultor_do_evento
+
+
+def _definir_consultor_do_evento(event_id, consultor):
+    e = next((x for x in EVENTOS if x["id"] == event_id), None)
+    if not e:
+        raise RuntimeError("evento nao existe")
+    DEFINIDOS_CONSULTOR.append((event_id, consultor))
+    e["consultor"] = (consultor or "").strip()[:80]  # como o real grava e a leitura devolve
+
+
+g.definir_consultor_do_evento = _definir_consultor_do_evento
 
 
 GANCHO_ATA = {"fn": None}  # chamado dentro do gerar_ata falso (a acao de cancelar aperta o botao ali, como no meio do Claude)
@@ -302,6 +330,8 @@ def novo_mundo(semente):
     LIXEIRA.clear()
     AGENDADOS.clear()
     INCLUIDOS.clear()
+    DEFINIDOS.clear()
+    DEFINIDOS_CONSULTOR.clear()
     LOGINS.clear()
     g.ESTADO["desconectado"] = None
     g.ESTADO["login"].update(rodando=False, erro=None, conta=None)

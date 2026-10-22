@@ -15,13 +15,14 @@ import acoes5 as A5
 import acoes6 as A6
 import acoes7 as A7
 import acoes8 as A8
+import acoes9 as A9
 import ambiente as amb
 import oraculo as o
 
 
 # Catalogos: "v1" = acoes.py CONGELADO (as sementes antigas sao este passeio); "v2" = v1 + acoes2.py.
-CATALOGOS = {"v1": A.ACOES, "v2": A2.ACOES2, "v3": A3.ACOES3, "v4": A4.ACOES4, "v5": A5.ACOES5, "v6": A6.ACOES6, "v7": A7.ACOES7, "v8": A8.ACOES8}
-ATIVO = {"nome": "v8"}
+CATALOGOS = {"v1": A.ACOES, "v2": A2.ACOES2, "v3": A3.ACOES3, "v4": A4.ACOES4, "v5": A5.ACOES5, "v6": A6.ACOES6, "v7": A7.ACOES7, "v8": A8.ACOES8, "v9": A9.ACOES9}
+ATIVO = {"nome": "v9"}
 
 
 def escolher(semente, i, catalogo=None):
@@ -107,7 +108,7 @@ def descrever(semente, indices, catalogo=None):
 def carimbo(catalogo=None):
     """Hash do catalogo de geradores: se muda, a semente guardada deixou de ser o mesmo passeio."""
     cat = catalogo or ATIVO["nome"]
-    ordem = ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"]
-    modulos = [A, A2, A3, A4, A5, A6, A7, A8]
+    ordem = ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"]
+    modulos = [A, A2, A3, A4, A5, A6, A7, A8, A9]
     fonte = "".join(inspect.getsource(mod) for mod in modulos[:ordem.index(cat) + 1])
     return hashlib.sha1(fonte.encode("utf-8")).hexdigest()[:12]
