@@ -78,6 +78,10 @@ sugestao automatica em `reunioes.sugerir_cliente`, `clientes.clientes_das_reunio
 google_services roda contra um `_SvcFalso` e cobra sendUpdates="none" e a leitura de extendedProperties lixo), I55 (consultor: espacos
 normalizados, <= 80, vazio apaga, escapado no painel e no /resumo; `consultores_conhecidos` sem repetir por caixa/acento e do mais usado
 ao menos; /reuniao/nova leva o consultor ao `agendar_followup`). Mutantes pegos: `sugerir_cliente` ignorando o fixado; rota sem normalizar.
+I56 (e-mail do consultor: `clientes.emails_dos_consultores` nunca estoura com evento/participante lixo, nunca devolve a minha conta
+nem algo sem @, o guardado mais recente vence e o palpite so vale com candidato unico que comeca com o primeiro nome; /reuniao/nova com
+consultor_email invalido nao cria evento nem convite, valido entra nos convidados uma vez so e vai ao evento, sem consultor e ignorado;
+o mapa vai escapado no <script>). Achou: nome so com acento solto (IndexError) e participantes/e-mail que nao sao texto.
 Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
 certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
 S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).

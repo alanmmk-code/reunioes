@@ -145,6 +145,42 @@ def consultores_conhecidos() -> list[str]:
     return [escrito for _, escrito in sorted(contagem.values(), key=lambda x: (-x[0], x[1].casefold()))]
 
 
+def _sem_acento(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", str(texto or "")) if not unicodedata.combining(c)).casefold()
+
+
+def emails_dos_consultores(eventos=None, eu=None) -> dict[str, str]:
+    """E-mail de cada consultor conhecido (chave: nome em NFC+casefold), para a tela de nova reunião já convidá-lo.
+
+    Vale o e-mail guardado na reunião mais recente dele. Sem nenhum guardado, um palpite: o convidado das reuniões
+    dele cujo e-mail ou nome começa com o primeiro nome do consultor (só se houver um único candidato)."""
+    eu = (minha_conta() if eu is None else eu).lower()
+    eventos = eventos if eventos is not None else _reunioes_passadas()
+    guardado, palpites = {}, {}
+    for ev in sorted(eventos, key=lambda e: e.get("inicio") or ""):
+        nome = str(ev.get("consultor") or "").strip()
+        if not nome:
+            continue
+        chave = unicodedata.normalize("NFC", nome).casefold()
+        email = str(ev.get("consultor_email") or "").strip()
+        if "@" in email:
+            guardado[chave] = email  # o mais recente fica
+        primeiro = (_sem_acento(nome).split() or [""])[0]
+        participantes = ev.get("participantes")
+        for p in (participantes if primeiro and isinstance(participantes, list) else []):
+            e = str(p.get("email") or "").strip().lower() if isinstance(p, dict) else ""
+            if "@" not in e or e == eu:
+                continue
+            local = _sem_acento(e.split("@")[0])
+            nome_p = _sem_acento(p.get("nome") or "").split()
+            if local.startswith(primeiro) or (nome_p and nome_p[0] == primeiro):
+                palpites.setdefault(chave, set()).add(e)
+    for chave, candidatos in palpites.items():
+        if chave not in guardado and len(candidatos) == 1:
+            guardado[chave] = next(iter(candidatos))
+    return guardado
+
+
 def sugerir_convidados(emails, cliente_id=None, eventos=None, eu=None) -> dict:
     """Quem costuma estar nas reuniões com estas pessoas (ou com o cliente), para marcar em vez de digitar.
 

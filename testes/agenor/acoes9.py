@@ -303,9 +303,100 @@ def f_consultor(m, r):
     return f"{pc} consultor {cenario} {ev['id']} {valor[:20]!r}"
 
 
+NOMES_CONSULTOR = ["Fabio", "Fábio", "FABIO", "fabio souza", "Fred", "Ana Maria", "  ", "́", "José", "Jose", "x" * 90, "<b>Rui</b>"]
+EMAILS_CONSULTOR = ["fabio@x.com", "Fabio@X.com", " fred@y.com.br ", "", "abc", "a@b", "a@@b.com", "fa bio@x.com", None, 5,
+                    "</script><b>@x.com", "ana.maria@cli.com"]
+PARTICIPANTES = [{"email": "fabio.luiz@consult.com.br", "nome": ""}, {"email": "FABIOLA@cli.com", "nome": "Fabiola"},
+                 {"email": "x@cli.com", "nome": "Fred Souza"}, {"email": "fred@z.com", "nome": ""}, {"email": "jose@cli.com", "nome": "José"},
+                 {"email": "eu@exemplo.com", "nome": "Fabio Eu"}, {"email": None}, {"email": "semarroba"}, {}, None, "texto", {"email": 5}]
+
+
+def _sem_acento(t):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", t or "") if not unicodedata.combining(c)).casefold()
+
+
+def f_consultor_email(m, r):
+    """E-mail do consultor (I56). Puro: `clientes.emails_dos_consultores` nunca estoura com evento/participante lixo, nunca devolve a
+    minha conta nem algo sem @, o e-mail guardado mais recente vence, palpite so com candidato unico que comeca com o primeiro nome.
+    Rota: /reuniao/nova com consultor_email invalido nao cria nada; valido entra nos convidados uma vez so (sem repetir por caixa) e
+    vai ao evento; sem consultor o e-mail e ignorado. Tela: o mapa vai escapado dentro do <script>."""
+    import unicodedata
+    import clientes as C
+    pc = m.pc(r)
+    eu = "eu@exemplo.com"
+    eventos = []
+    for k in range(r.randint(0, 8)):
+        ev = {"id": f"c{k}", "inicio": f"2030-01-{r.randint(1, 28):02d}T10:00", "consultor": r.choice(NOMES_CONSULTOR + [None, ""]),
+              "participantes": r.sample(PARTICIPANTES, r.randint(0, 4))}
+        if r.random() < 0.6:
+            ev["consultor_email"] = r.choice(EMAILS_CONSULTOR)
+        if r.random() < 0.05:
+            ev["participantes"] = r.choice([None, "x", 5])
+        eventos.append(ev)
+    try:
+        res = C.emails_dos_consultores(eventos, eu=eu)
+    except Exception as e:
+        raise o.Achado("I56-estoura", f"emails_dos_consultores({eventos!r}): {type(e).__name__}: {e}", f"I56-estoura:{type(e).__name__}")
+    ordem = sorted(eventos, key=lambda e: e.get("inicio") or "")
+    for chave, email in res.items():
+        cobrar(isinstance(email, str) and "@" in email and email.lower() != eu, "I56-email-ruim", f"{chave!r} -> {email!r}")
+        dele = [e for e in ordem if isinstance(e.get("consultor"), str) and e["consultor"].strip()
+                and unicodedata.normalize("NFC", e["consultor"].strip()).casefold() == chave]
+        cobrar(bool(dele), "I56-chave-sem-consultor", f"{chave!r} nao e consultor de nenhum evento")
+        guardados = [str(e.get("consultor_email") or "").strip() for e in dele if "@" in str(e.get("consultor_email") or "")]
+        if guardados:
+            cobrar(email == guardados[-1], "I56-guardado-nao-vence", f"{chave!r}: {email!r}, o mais recente guardado e {guardados[-1]!r}")
+        else:
+            primeiro = (_sem_acento(dele[0]["consultor"]).split() or [""])[0]
+            cands = {(p.get("email") or "").strip().lower() for e in dele for p in (e.get("participantes") if isinstance(e.get("participantes"), list) else [])
+                     if isinstance(p, dict) and isinstance(p.get("email"), str) and "@" in p["email"] and p["email"].strip().lower() != eu
+                     and primeiro and (_sem_acento(p["email"].split("@")[0]).startswith(primeiro)
+                                       or (_sem_acento(p.get("nome") or "").split() or [""])[0] == primeiro)}
+            cobrar(cands == {email}, "I56-palpite", f"{chave!r}: palpite {email!r}, candidatos {sorted(cands)}")
+    # rota
+    consultor = r.choice(["Fabio", "", "  ", "Fred"])
+    email = r.choice([x for x in EMAILS_CONSULTOR if isinstance(x, str)] + ["fabio@x.com"])
+    base = r.sample(["fabio@x.com", "FABIO@x.com", "a@cli.com", "b@cli.com"], r.randint(0, 3))
+    amb.AGENDADOS.clear()
+    n_env = len(amb.ENVIOS)
+    pc, resp = chamar(m, r, "post", "/reuniao/nova", data={"data": "2030-01-02", "hora": "10:00", "titulo": "T", "duracao": "30",
+                                                           "consultor": consultor, "consultor_email": email, "convidados": ", ".join(base)})
+    cobrar(resp.status_code < 500, "I56-rota-5xx", f"{pc}: consultor_email={email!r} -> {resp.status_code}")
+    limpo = email.strip()
+    from extras import _EMAIL
+    if limpo and not _EMAIL.fullmatch(limpo):
+        convites = [x for x in amb.ENVIOS[n_env:] if x[0] == "enviar_convite"]  # contas()/remetente_padrao() da tela nao contam
+        cobrar(not amb.AGENDADOS and not convites, "I56-invalido-criou", f"{pc}: consultor_email={email!r} invalido e criou/enviou")
+        return f"{pc} consultor_email invalido {email!r}"
+    cobrar(len(amb.AGENDADOS) == 1, "I56-nao-criou", f"{pc}: consultor_email={email!r} consultor={consultor!r}: {len(amb.AGENDADOS)} eventos")
+    if amb.AGENDADOS:
+        a, k = amb.AGENDADOS[0]
+        convidados = a[3]
+        antes = sum(x.lower() == limpo.lower() for x in base) if limpo else 0
+        tem = sum(x.lower() == limpo.lower() for x in convidados) if limpo else 0
+        if consultor.strip() and limpo:
+            cobrar(tem == max(1, antes), "I56-convidado", f"{pc}: {limpo!r} aparece {tem}x nos convidados {convidados} (vinha {antes}x)")
+            cobrar(k.get("consultor_email") == limpo, "I56-evento", f"{pc}: evento recebeu consultor_email={k.get('consultor_email')!r}, esperado {limpo!r}")
+        else:
+            cobrar(tem == antes and not k.get("consultor_email"), "I56-sem-consultor",
+                   f"{pc}: consultor={consultor!r}: e-mail {limpo!r} {tem}x (vinha {antes}x), evento={k.get('consultor_email')!r}")
+    # tela: e-mail hostil guardado num evento nao fecha o <script>
+    ev = r.choice([e for e in amb.EVENTOS if e["link"]])
+    ev["consultor"], ev["consultor_email"] = "Rui", "</script><b>@x.com"
+    C._historico["quando"] = 0
+    pc, resp = chamar(m, r, "get", "/reuniao/nova")
+    if resp.status_code == 200:
+        cobrar("</script><b>" not in resp.get_data(as_text=True), "I56-tela-injeta", f"{pc}: e-mail do consultor entrou cru no <script>")
+    ev["consultor"], ev["consultor_email"] = "", ""
+    C._historico["quando"] = 0
+    return f"{pc} consultor_email {consultor!r} {email!r}"
+
+
 ACOES9 = A8.ACOES8 + [
     Acao("fixar o cliente da reuniao", f_fixar_cliente, 3, True, ["/resumo/<event_id>/cliente", "clientes.clientes_das_reunioes", "reunioes.sugerir_cliente"]),
     Acao("consultor da reuniao", f_consultor, 3, True, ["/resumo/<event_id>/consultor", "clientes.consultores_conhecidos"]),
+    Acao("e-mail do consultor", f_consultor_email, 3, True, ["/reuniao/nova", "clientes.emails_dos_consultores"]),
 ]
 SEM_ACAO = A8.SEM_ACAO
 SEM_FUZZ = A8.SEM_FUZZ

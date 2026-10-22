@@ -28,8 +28,12 @@ o Meet passa a reconhecer o cliente sozinho.</p>
 <label class="mut">Hora <input type="time" name="hora" value="10:00" required></label>
 <label class="mut">Duração <select name="duracao">{% for m in duracoes %}<option value="{{ m }}" {{ 'selected' if m == 30 }}>{% if m < 60 %}{{ m }} min{% else %}{{ m // 60 }}h{% if m % 60 %}{{ '%02d' % (m % 60) }}{% endif %}{% endif %}</option>{% endfor %}</select></label>
 </div>
-<label class="mut">Consultor <input name="consultor" list="consultores" maxlength="80" placeholder="quem vai conduzir" autocomplete="off"></label>
+<div class="nr-consultor">
+<label class="mut">Consultor <input name="consultor" id="consultor" list="consultores" maxlength="80" placeholder="quem vai conduzir" autocomplete="off"></label>
+<label class="mut">E-mail do consultor <input type="email" name="consultor_email" id="consultor-email" maxlength="200" placeholder="entra nos convidados" autocomplete="off"></label>
+</div>
 <datalist id="consultores">{% for n in consultores %}<option value="{{ n }}">{% endfor %}</datalist>
+<style>.nr-consultor{display:grid;grid-template-columns:1fr 1fr;gap:10px}@media(max-width:640px){.nr-consultor{grid-template-columns:1fr}}</style>
 <label class="mut">Convidados (e-mails separados por vírgula)
 <input name="convidados" id="convidados" value="{{ convidados }}" placeholder="pessoa@cliente.com" autocomplete="off"></label>
 <div id="sugeridos" class="mut" hidden style="font-size:13px">
@@ -57,6 +61,19 @@ btn.onclick=()=>{gravar(atuais().concat(d.ultima.emails));sincronizar()}}
 box.hidden=!d.pessoas.length;sincronizar()}).catch(()=>{})};
 let t;campo.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(buscar,500)});
 campo.addEventListener('change',buscar);buscar()})()</script>
+<script>(()=>{/* consultor conhecido: preenche o e-mail dele e o põe nos convidados (troca se o consultor mudar) */
+const mapa={{ emails_consultores|tojson }},nome=document.getElementById('consultor'),mail=document.getElementById('consultor-email'),
+conv=document.getElementById('convidados');let posto='',auto='';
+const chave=s=>s.trim().split(/\s+/).join(' ').normalize('NFC').toLowerCase();
+const aplicar=()=>{const novo=mail.value.includes('@')&&mail.checkValidity()?mail.value.trim():'';
+const a=conv.value.split(/[,;]/).map(s=>s.trim()).filter(Boolean).filter(x=>!(posto&&x.toLowerCase()===posto.toLowerCase()));
+posto='';if(novo&&!a.some(x=>x.toLowerCase()===novo.toLowerCase())){a.push(novo);posto=novo}
+conv.value=a.join(', ');conv.dispatchEvent(new Event('change'))};
+const escolher=()=>{const e=nome.value.trim()?mapa[chave(nome.value)]:'';
+if(e&&(!mail.value||mail.value===auto)){mail.value=auto=e;aplicar()}
+else if(!e&&auto&&mail.value===auto){mail.value=auto='';aplicar()}};
+nome.addEventListener('input',escolher);nome.addEventListener('change',escolher);
+mail.addEventListener('change',()=>{auto='';aplicar()})})()</script>
 <label class="mut">Pauta <textarea name="pauta" rows="8">{{ pauta }}</textarea></label>
 {{ seletor_remetente()|safe }}
 <p class="mut" style="margin:0;font-size:12.5px">A reunião é criada no seu Google Agenda com o link do Meet, e o convite

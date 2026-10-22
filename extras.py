@@ -123,8 +123,15 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
                 pauta = request.form.get("pauta", "").strip()
                 # evento (com Meet) no Google Agenda sem e-mail do Google; o convite sai pelo Outlook
                 consultor = " ".join(request.form.get("consultor", "").split())[:80]
+                consultor_email = request.form.get("consultor_email", "").strip()
+                if consultor_email and not _EMAIL.fullmatch(consultor_email):
+                    raise ValueError(f"o e-mail do consultor ({consultor_email}) não parece um e-mail")
+                if not consultor:
+                    consultor_email = ""
+                if consultor_email and consultor_email.lower() not in {e.lower() for e in convidados}:
+                    convidados.append(consultor_email)  # o consultor sempre vai convidado
                 criado = g.agendar_followup(titulo, inicio, duracao, convidados, pauta, enviar_convites=False,
-                                            consultor=consultor)
+                                            consultor=consultor, consultor_email=consultor_email)
                 remetente = request.form.get("remetente") or envio.remetente_padrao()
                 if convidados:
                     try:
@@ -155,7 +162,7 @@ def registrar(app, pagina, seletor_cliente, sugerir_cliente, cliente_do_formular
         amanha = date.today() + timedelta(days=1)
         return pagina(_tela("nova_reuniao.html"), c=c, clientes=db.clientes(), pauta=pauta, convidados=convidados,
                       data=amanha.isoformat(), titulo=f"Reunião {c['nome']}" if c else "", duracoes=DURACOES,
-                      consultores=clientes.consultores_conhecidos())
+                      consultores=clientes.consultores_conhecidos(), emails_consultores=clientes.emails_dos_consultores())
 
     @app.get("/reuniao/sugestoes")
     def sugestoes_convidados():
