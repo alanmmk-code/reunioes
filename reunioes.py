@@ -397,10 +397,60 @@ def abrir_janela() -> None:
         _abrir_janela()
 
 
+LOG_MAX = 2_000_000  # bytes por arquivo de log; ficam o atual e mais LOG_COPIAS antigos (.1, .2…)
+LOG_COPIAS = 2
+
+
+def _girar_log(caminho: Path, forcar: bool = False) -> None:
+    """Passou de LOG_MAX: o log vira .1 (o .1 vira .2, e o mais antigo sai) e o próximo começa vazio."""
+    try:
+        if not forcar and (not caminho.exists() or caminho.stat().st_size <= LOG_MAX):
+            return
+        for i in range(LOG_COPIAS, 0, -1):
+            anterior = caminho if i == 1 else caminho.with_name(f"{caminho.name}.{i - 1}")
+            if anterior.exists():
+                os.replace(anterior, caminho.with_name(f"{caminho.name}.{i}"))
+    except OSError:
+        pass  # arquivo preso por outro programa: tenta de novo na próxima
+
+
+class LogGirando:
+    """Saída do painel sem janela (print e erros) num arquivo que não cresce sem fim."""
+
+    def __init__(self, caminho: Path):
+        self.caminho, self._lock = caminho, threading.Lock()
+        _girar_log(caminho)
+        self._abrir()
+
+    def _abrir(self):
+        self._f = open(self.caminho, "a", encoding="utf-8", buffering=1)
+        self._tamanho = self.caminho.stat().st_size
+        # Se não deu para girar (arquivo preso por outro processo), tenta de novo só depois de mais 10%
+        self._limite = max(LOG_MAX, self._tamanho + LOG_MAX // 10)
+
+    def write(self, texto: str) -> int:
+        with self._lock:
+            n = self._f.write(texto)
+            self._tamanho += len(texto.encode("utf-8", "replace")) + (texto.count("\n") if os.name == "nt" else 0)
+            if self._tamanho > self._limite:
+                self._f.close()
+                _girar_log(self.caminho, forcar=True)
+                self._abrir()
+            return n
+
+    def flush(self) -> None:
+        with self._lock:
+            self._f.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+
 def _abrir_janela() -> None:
     if janela_aberta():
         return
     pythonw = config.BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
+    _girar_log(config.BASE_DIR / "janela.log")
     log = open(config.BASE_DIR / "janela.log", "a", encoding="utf-8")
     log.write(f"\n--- {datetime.now():%d/%m %H:%M:%S} abrindo a janela\n")
     log.flush()
@@ -2219,8 +2269,7 @@ if __name__ == "__main__":
             webbrowser.open(url)
             sys.exit(0)
         if sys.stdout is None:  # iniciado sem janela (pythonw, inicialização do Windows)
-            log = open(config.BASE_DIR / "reunioes.log", "a", encoding="utf-8", buffering=1)
-            sys.stdout = sys.stderr = log
+            sys.stdout = sys.stderr = LogGirando(config.BASE_DIR / "reunioes.log")
         if config.GRAVACAO_AUTOMATICA:
             monitor.iniciar(ao_detectar_meet, ao_encerrar_meet,
                             lambda: GRAVADOR.ativo and GRAVADOR.automatica and not GRAVADOR.pela_extensao,

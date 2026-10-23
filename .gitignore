@@ -5,11 +5,13 @@ token.json
 atas/
 __pycache__/
 reunioes.log
+reunioes.log.*
 gravacoes/
 dados.db
 copias/
 .claude_code/
 lembretes.json
 janela.log
+janela.log.*
 excluidos.json
 convites.json
