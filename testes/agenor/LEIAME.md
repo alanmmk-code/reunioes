@@ -34,8 +34,8 @@ desfaz, idempotente), H1..H4 (hostis), R1/R2 (rota estoura / 5xx).
 `v1` = acoes.py, `v2` = v1 + acoes2.py (clientes/sincronia), `v3` = v2 + acoes3.py (pessoas dos clientes, remarcar,
 envios presos no Outlook, extensao sem gravacao), `v4` = v3 + acoes4.py (excluir cliente e recadastrar), `v5` = v4 + acoes5.py (POST de outro site, DNS rebinding), `v6` = v5 + acoes6.py (copias de seguranca: voltar e desfazer;
 "Reconectar Google"; aviso de PC parado; sinal de vida hostil no Drive), `v7` = v6 + acoes7.py (som mudo da extensao, vinculos de
-convite do Outlook entre PCs, editar ata com o Doc alterado fora do painel, arquivar videos antigos), `v8` = v7 + acoes8.py (som do PC no lugar da extensao), `v9` = v8 + acoes9.py (cliente fixado e consultor por reuniao). Cada um CONGELADO quando o
-seguinte nasce: acao nova vai num catalogo novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v9.
+convite do Outlook entre PCs, editar ata com o Doc alterado fora do painel, arquivar videos antigos), `v8` = v7 + acoes8.py (som do PC no lugar da extensao), `v9` = v8 + acoes9.py (cliente fixado e consultor por reuniao), `v10` = v9 + acoes10.py (juntar a gravacao que voltou, copia local da agenda, alucinacao do Whisper). Cada um CONGELADO quando o
+seguinte nasce: acao nova vai num catalogo novo, senao as sementes guardadas deixam de ser o mesmo passeio. Padrao: v10.
 Conserto de ORACULO ou de gerador que estourava (sem mudar o sorteio de passos nem o consumo do `random`) pode entrar num catalogo
 congelado: o passeio continua o mesmo, e os carimbos do corpus sao refeitos (2026-10-22: `_quando` do I49 lendo enviado_em como hora
 local, em acoes7.py; tarefa hostil que nao e dict em acoes2.py).
@@ -82,6 +82,34 @@ I56 (e-mail do consultor: `clientes.emails_dos_consultores` nunca estoura com ev
 nem algo sem @, o guardado mais recente vence e o palpite so vale com candidato unico que comeca com o primeiro nome; /reuniao/nova com
 consultor_email invalido nao cria evento nem convite, valido entra nos convidados uma vez so e vai ao evento, sem consultor e ignorado;
 o mapa vai escapado no <script>). Achou: nome so com acento solto (IndexError) e participantes/e-mail que nao sao texto.
+Propriedades do v10 (ainda nao commitadas quando escritas: `juntar_com_a_anterior`, `_guardar_agenda`, `alucinacao_conhecida`):
+I57 (`f_juntar_gravacoes`; WAVs de verdade de 1000/8000 Hz em pasta temporaria, `-agj-` no nome, apagados no fim; o modelo diz QUEM e a anterior
+olhando o disco antes da chamada; roda `juntar_com_a_anterior` direto ou o `ao_encerrar_meet` inteiro com `encerrar_gravacao`, `_vincular_telas`,
+`webbrowser` e `monitor.notificar` falsos). Cobra: audio final = anterior + silencio + nova (silencio = inicio da nova - inicio da anterior -
+duracao do AUDIO da anterior, nunca negativo), duracao total, minutos = duracao total, encerrada_em da nova, transcricao ao vivo concatenada,
+nova resolvida=`juntada:<anterior>` sem audios, uma pendente a menos, iscas intactas, chamar de novo nao faz nada, trilha que a nova nao tem fica
+como estava; NAO junta (e nenhum arquivo muda) com outra reuniao, avulsa, anterior ja decidida, .webm/.txt em qualquer das duas, fora de
+-60..600 s, SINCRONIZAR_AUDIO, nova com trilha que a anterior nao tem, anterior sem a trilha voce ou com encerrada_em lixo; no ao_encerrar_meet
+juntou => devolve a anterior, abre a pergunta dela e nao avisa; nao juntou => devolve a nova, avisa e abre a nova; juntar_wavs falhando: os
+audios da nova ficam, a nova continua pendente e o ao_encerrar_meet segue (ver ABERTAS abaixo).
+I58 (`f_agenda_local`; `g.AGENDA_LOCAL` aponta para uma pasta dentro de TMP durante a acao; o ambiente agora deixa `reunioes_guardadas` de
+verdade e guarda `amb.LISTAR_REUNIOES_REAL`, que roda com `g._eventos` trocado): `_guardar_agenda` troca so o periodo consultado (o que sumiu do
+Google sai, o de fora do periodo fica), guarda so de -2 a +7 dias, sem id repetido, sem `.tmp`, nunca levanta; `listar_reunioes` guarda e filtra
+so os com link; Google falhando nao grava; `reunioes_guardadas` com arquivo corrompido/pasta/lixo devolve lista vazia; `_reuniao_da_janela` com
+o Google falhando associa pela copia (codigo do Meet, ou o unico em andamento), igual ao caminho normal com os mesmos candidatos, e com o Google
+respondendo (mesmo vazio) a copia nunca vale.
+I59 (`f_alucinacao`): "Legendas pela comunidade de Amara.org", "se inscreva no canal", "obrigado por assistir" etc. (qualquer caixa, com texto em volta)
+sao descartadas por `segmento_confiavel` mesmo com numeros bons; "a legenda de preco", "inscreva-se no site", "Tchau, tchau" nao; a regra antiga
+(compressao > 2.4, silencio provavel, logprob) segue valendo; texto None/vazio nunca estoura; `transcrever_audio` (modelo falso) so devolve as legitimas.
+Mutantes (copias em AGENOR_ALVO, nunca no codigo real) que o v10 pega, 30 de 30: janela de 10 min alargada; sem a margem de -60 s; sem o id da
+reuniao; sem o SINCRONIZAR_AUDIO; sem o "avulsa-"; sem o subconjunto de trilhas; sem o .webm/.txt da anterior; silencio zero; audios da nova nao
+apagados; nova nao resolvida; marca `juntada:` errada; minutos somados em vez de recalculados; encerrada_em nao atualizado; transcricoes
+invertidas; `ao_encerrar_meet` devolvendo a nova / ignorando a juntada / avisando mesmo juntando / deixando a excecao subir; poda de 20 dias;
+sem substituir o periodo; frente de 30 dias; `listar_reunioes` sem guardar; `os.replace` no arquivo errado; `except` sem ValueError; fallback
+com lista vazia; copia usada com o Google respondendo vazio; "obrigado por assistir" fora do regex; "legenda" solta; "inscreva(-se)?" solto;
+sem IGNORECASE; `segmento_confiavel` sem chamar `alucinacao_conhecida`. Os scripts dos mutantes sao descartaveis (copiar *.py do projeto,
+trocar um trecho, `AGENOR_ALVO=<pasta>`, rodar so as tres acoes novas filtrando os indices por `N.escolher(...)[0].nome`).
+
 Propriedades do v3: I21/I22 (pessoa ligada aparece, sem duplicar), I23 (remarcar so quando pode, horario/duracao/aviso
 certos, convite do Outlook atualizado), I24 (dispensar envio so mexe nele), I25 (extensao sem gravacao nao cria arquivo),
 S10 (pessoas convergem entre os PCs), E26/E27 (pessoa uma vez por cliente, inclusive acentuada; listas coerentes).
@@ -107,3 +135,9 @@ atravessa mudanca de `acoes.py` (o corpus carimba o catalogo e avisa).
 O Agenor simula o Outlook (nada sai de verdade), entao confere so a ordem que o painel da, nao o que o Outlook
 manda. Mudou algo em `envio.py` que mexe em convite? Rode a mao o teste real, so entre contas suas:
 `.venv\Scripts\python.exe testes\outlook_real\incluir_convidado.py ORGANIZADOR CONVIDADO NOVO`.
+
+## ABERTAS (achados verdadeiros sem decisao; casos minimos em `sementes/abertos/`)
+Nenhuma. Consertados em 23/10 e guardados como regressao em `sementes/`:
+- `I58-guardadas-levanta`: `reunioes_guardadas` com agenda_local.json valido mas nao lista (`null`, `5`) levantava TypeError; agora devolve [].
+- `I57-erro-juntou-pela-metade`: `juntar_com_a_anterior` junta todas as trilhas em temporarios e so troca no fim; falha numa trilha nao muda nada.
+- (observacao) o regex de alucinacao agora so pega "legendas por Fulano" quando e o segmento inteiro; "revisar as legendas por produto" passa.

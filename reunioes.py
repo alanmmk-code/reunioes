@@ -347,8 +347,13 @@ def _reuniao_da_janela(titulo_janela: str) -> dict:
     """Associa a chamada detectada a um evento da agenda (pelo código do Meet)."""
     codigo, nome = monitor.info_da_janela(titulo_janela)
     try:
-        agora = datetime.now().astimezone()
         candidatos = g.listar_reunioes(dias_atras=1, dias_frente=1)
+    except Exception:
+        traceback.print_exc()
+        candidatos = g.reunioes_guardadas()  # Google fora: a cópia local da agenda ainda dá o nome certo
+        print(f"[monitor] sem acesso ao Google: procurando a reunião na cópia local da agenda ({len(candidatos)})")
+    try:
+        agora = datetime.now().astimezone()
         for r in candidatos:
             if codigo and r["codigo_meet"] == codigo:
                 return r
@@ -615,6 +620,16 @@ def ao_encerrar_meet() -> str | None:
     videos = _vincular_telas(pid)
     if videos:
         threading.Thread(target=_juntar_audio_nos_videos, args=(pid, videos, inicio, arquivos), daemon=True).start()
+    else:
+        try:
+            anterior = juntar_com_a_anterior(pid)
+        except Exception:
+            traceback.print_exc()  # fica como gravação separada
+            anterior = None
+        if anterior:
+            print(f"[monitor] a chamada voltou depois de cair: gravação juntada com a anterior ({anterior})")
+            webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{quote(anterior)}")
+            return anterior
     print(f"[monitor] chamada encerrada após {segundos / 60:.0f} min; aguardando decisão sobre a ata")
     monitor.notificar("Reunião encerrada", "Quer gerar a ata? Abri a pergunta no navegador.")
     webbrowser.open(f"http://localhost:{config.PORTA}/pendente/{quote(pid)}")
@@ -822,6 +837,63 @@ def salvar_pendente(reuniao: dict, arquivos: dict, transcricao_ao_vivo: str, seg
              "encerrada_em": datetime.now().isoformat(timespec="minutes")}
     _gravar_pendente(pid, dados)
     return pid
+
+
+JUNTAR_MIN = 10  # a chamada da mesma reunião voltou até esse tempo depois de cair: continua a gravação anterior
+
+
+def _tem_video_ou_texto(pid: str) -> bool:
+    return any(_eh_da_gravacao(a.name, pid) and a.suffix in (".webm", ".txt") for a in config.GRAVACOES_DIR.iterdir())
+
+
+def juntar_com_a_anterior(pid: str) -> str | None:
+    """A chamada caiu e voltou: junta esta gravação no fim da anterior da mesma reunião (com silêncio no
+    intervalo), se ela ainda aguarda decisão. Devolve o id da anterior, ou None se ficaram separadas.
+    Não junta quando há vídeo da tela ou transcrição já feita, nem com áudio sincronizado entre PCs
+    (os .wav do Drive não seriam atualizados)."""
+    nova = carregar_pendente(pid)
+    if not nova or config.SINCRONIZAR_AUDIO or str(nova["reuniao"].get("id", "")).startswith("avulsa-"):
+        return None
+    inicio_nova = _inicio_da_gravacao(pid, nova)
+    arquivos_novos = _audios_da_pendente(nova)
+    if "voce" not in arquivos_novos or _tem_video_ou_texto(pid):
+        return None
+    for ant in listar_pendentes():
+        apid = ant["pid"]
+        if apid == pid or ant["reuniao"].get("id") != nova["reuniao"]["id"] or _tem_video_ou_texto(apid):
+            continue
+        try:
+            intervalo = (inicio_nova - datetime.fromisoformat(ant["encerrada_em"])).total_seconds()
+        except (TypeError, ValueError):
+            continue
+        arquivos_ant = _audios_da_pendente(ant)
+        if not (-60 <= intervalo <= JUNTAR_MIN * 60) or "voce" not in arquivos_ant or not set(arquivos_novos) <= set(arquivos_ant):
+            continue
+        # duração da anterior pelo próprio áudio; o resto até o começo da nova é silêncio
+        with wave.open(str(arquivos_ant["voce"])) as w:
+            dur_ant = w.getnframes() / w.getframerate()
+        silencio = max(0.0, (inicio_nova - _inicio_da_gravacao(apid, ant)).total_seconds() - dur_ant)
+        # tudo em temporários primeiro: se uma trilha falhar, nenhuma fica juntada pela metade
+        temps = {nome: arquivos_ant[nome].with_name(arquivos_ant[nome].name + ".juntando") for nome in arquivos_novos}
+        try:
+            for nome, caminho in arquivos_novos.items():
+                gravador.juntar_wavs(arquivos_ant[nome], caminho, silencio, saida=temps[nome])
+        except Exception:
+            for t in temps.values():
+                t.unlink(missing_ok=True)
+            raise
+        for nome, t in temps.items():
+            os.replace(t, arquivos_ant[nome])
+        with wave.open(str(arquivos_ant["voce"])) as w:
+            total = w.getnframes() / w.getframerate()
+        ao_vivo = "\n".join(t for t in (ant.get("transcricao_ao_vivo"), nova.get("transcricao_ao_vivo")) if t)
+        dados = {k: v for k, v in ant.items() if k != "pid"}
+        dados.update(minutos=round(total / 60), encerrada_em=nova["encerrada_em"], transcricao_ao_vivo=ao_vivo)
+        _gravar_pendente(apid, dados)
+        excluir_arquivos_da_gravacao(pid)
+        _resolver_pendente(pid, nova, f"juntada:{apid}")
+        return apid
+    return None
 
 
 def _gravar_pendente(pid: str, dados: dict) -> None:

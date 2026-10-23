@@ -1,0 +1,10 @@
+{
+  "semente": "1009",
+  "passos": [
+    613
+  ],
+  "chave": "I58-guardadas-levanta:TypeError",
+  "catalogo": "v10",
+  "carimbo": "3e20063b7549",
+  "msg": "B: arquivo b'true': reunioes_guardadas levantou TypeError: 'bool' object is not iterable"
+}

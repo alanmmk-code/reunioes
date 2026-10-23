@@ -1,6 +1,8 @@
 """Integração com Google: Agenda, Meet (transcrições), Drive (Docs) e Gmail."""
 
 import base64
+import json
+import os
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -190,7 +192,53 @@ def listar_eventos(inicio: datetime, fim: datetime) -> list[dict]:
 def listar_reunioes(dias_atras: int = 7, dias_frente: int = 7) -> list[dict]:
     """Eventos da agenda principal que têm link do Google Meet."""
     agora = datetime.now(timezone.utc)
-    return [e for e in _eventos(agora - timedelta(days=dias_atras), agora + timedelta(days=dias_frente)) if e["link"]]
+    inicio, fim = agora - timedelta(days=dias_atras), agora + timedelta(days=dias_frente)
+    reunioes = [e for e in _eventos(inicio, fim) if e["link"]]
+    _guardar_agenda(inicio, fim, reunioes)
+    return reunioes
+
+
+# Cópia local das reuniões próximas: com o Google fora do ar (sem internet, autorização vencida), a chamada
+# detectada ainda é associada à reunião certa da agenda.
+AGENDA_LOCAL = config.DADOS_DIR / "agenda_local.json"
+_agenda_lock = threading.Lock()
+
+
+def _quando(texto: str) -> datetime | None:
+    if "T" not in (texto or ""):
+        return None
+    try:
+        return datetime.fromisoformat(texto.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _guardar_agenda(inicio: datetime, fim: datetime, reunioes: list[dict]) -> None:
+    """Troca, na cópia local, o que havia no período consultado pelo que veio agora; guarda só de 2 dias atrás a 7 à frente."""
+    agora = datetime.now(timezone.utc)
+    try:
+        with _agenda_lock:
+            guardadas = reunioes_guardadas()
+            fora = [r for r in guardadas if not (_quando(r["inicio"]) and inicio <= _quando(r["inicio"]) <= fim)]
+            juntas = {r["id"]: r for r in fora + reunioes}.values()
+            manter = [r for r in juntas if _quando(r.get("inicio"))
+                      and agora - timedelta(days=2) <= _quando(r["inicio"]) <= agora + timedelta(days=7)]
+            temp = AGENDA_LOCAL.with_suffix(".tmp")
+            temp.write_text(json.dumps(manter, ensure_ascii=False), encoding="utf-8")
+            os.replace(temp, AGENDA_LOCAL)
+    except Exception as e:
+        print(f"[agenda] não consegui guardar a cópia local: {e!r}")
+
+
+def reunioes_guardadas() -> list[dict]:
+    """Última cópia local das reuniões (pode estar desatualizada)."""
+    try:
+        dados = json.loads(AGENDA_LOCAL.read_text(encoding="utf-8"))
+        if not isinstance(dados, list):
+            return []
+        return [r for r in dados if isinstance(r, dict) and r.get("id") and r.get("inicio")]
+    except (OSError, ValueError):
+        return []
 
 
 def obter_reuniao(event_id: str) -> dict | None:

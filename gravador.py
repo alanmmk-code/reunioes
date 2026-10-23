@@ -6,6 +6,7 @@ Duas trilhas separadas:
 Gravar separado permite marcar quem falou na transcrição.
 """
 
+import re
 import threading
 import time
 import wave
@@ -302,6 +303,24 @@ class Gravador:
         return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
+def juntar_wavs(destino, extra, silencio_seg: float, saida=None) -> None:
+    """Acrescenta `extra` no fim de `destino` (mesmo formato), com `silencio_seg` de silêncio entre os dois.
+    Com `saida`, grava o resultado lá e não mexe em `destino` (quem chama troca depois)."""
+    import os
+
+    saida_dada = saida is not None
+    temp = saida or destino.with_name(destino.name + ".juntando")
+    with wave.open(str(destino)) as a, wave.open(str(extra)) as b, wave.open(str(temp), "wb") as saida:
+        saida.setparams(a.getparams())
+        while dados := a.readframes(TAXA * 60):
+            saida.writeframes(dados)
+        saida.writeframes(b"\x00" * (int(silencio_seg * a.getframerate()) * a.getsampwidth() * a.getnchannels()))
+        while dados := b.readframes(TAXA * 60):
+            saida.writeframes(dados)
+    if not saida_dada:
+        os.replace(temp, destino)
+
+
 def juntar_audio_no_video(video, audios: list, saida, atraso_seg: float) -> None:
     """O vídeo da tela vem sem som: mistura as trilhas (você + outros) e põe no vídeo, sem recodificar a imagem.
     atraso_seg: quanto tempo depois do início da gravação de áudio o vídeo começou (negativo: começou antes)."""
@@ -363,8 +382,22 @@ def prompt_contexto(reuniao: dict | None) -> str:
     return (", ".join(nomes) + ".")[:500] if nomes else ""
 
 
+# Frases que o Whisper inventa no silêncio (vêm de legendas de vídeos com que ele foi treinado)
+_ALUCINACOES = re.compile(
+    r"amara\.org|legendas pela comunidade|^legendas por \w+( \w+){0,3}[.!]?$|inscreva(-se)? no canal|se inscreva no canal"
+    r"|obrigad[oa] por assistir"
+    r"|deixe (seu|o) like|ative o sininho|até o próximo vídeo|sous-titr|subtítulos (por|realizados)",
+    re.IGNORECASE)
+
+
+def alucinacao_conhecida(texto: str) -> bool:
+    return bool(_ALUCINACOES.search(texto.strip()))
+
+
 def segmento_confiavel(seg) -> bool:
     """Descarta o que o próprio Whisper indica como provável invenção (alucinação)."""
+    if alucinacao_conhecida(getattr(seg, "text", "") or ""):
+        return False
     if getattr(seg, "compression_ratio", 0) > 2.4:  # frase repetida em looping
         return False
     if getattr(seg, "no_speech_prob", 0) > 0.6 and getattr(seg, "avg_logprob", 0) < -1.0:

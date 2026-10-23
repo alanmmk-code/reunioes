@@ -115,10 +115,14 @@ DEFINIR_CLIENTE_REAL = g.definir_cliente_do_evento  # a acao I48 roda o de verda
 DEFINIR_CONSULTOR_REAL = g.definir_consultor_do_evento
 AGENDAR_REAL = g.agendar_followup
 EVENTOS_REAL = g._eventos  # idem para a leitura de extendedProperties
+LISTAR_REUNIOES_REAL = g.listar_reunioes  # a acao da agenda local roda o de verdade, com g._eventos trocado
 # tudo o que e publico em google_services vira bloqueio (menos as funcoes puras, sem rede); a agenda ganha um falso
 for _n in dir(g):
-    if not _n.startswith("_") and _n not in ("id_do_link", "anotar_conexao", "autorizacao_vencida") and callable(getattr(g, _n)) and getattr(getattr(g, _n), "__module__", "") == g.__name__:
+    if not _n.startswith("_") and _n not in ("id_do_link", "anotar_conexao", "autorizacao_vencida", "reunioes_guardadas") and callable(getattr(g, _n)) and getattr(getattr(g, _n), "__module__", "") == g.__name__:
         setattr(g, _n, _bloqueio(_n))
+
+if hasattr(g, "AGENDA_LOCAL"):  # copia local da agenda: calculada no import a partir de config.DADOS_DIR (ja trocado acima)
+    assert TMP in g.AGENDA_LOCAL.parents, "g.AGENDA_LOCAL nao esta na pasta temporaria"
 
 CLOCK = {"n": 0}
 RNG = {"r": random.Random(0)}

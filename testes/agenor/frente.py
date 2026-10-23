@@ -27,22 +27,23 @@ import acoes6 as A6  # noqa: E402
 import acoes7 as A7  # noqa: E402
 import acoes8 as A8  # noqa: E402
 import acoes9 as A9  # noqa: E402
+import acoes10 as A10  # noqa: E402
 import nucleo as N  # noqa: E402
 
 
 def cobertura():
     rotas = sorted({str(r.rule) for r in amb.reunioes.app.url_map.iter_rules() if r.endpoint != "static"})
-    cobertas = {c for a in A9.ACOES9 for c in a.cobre}
+    cobertas = {c for a in A10.ACOES10 for c in a.cobre}
     if "*" in cobertas:  # o fuzz generico sorteia qualquer rota do url_map, menos as de SEM_FUZZ
         cobertas |= {r for r in [str(x.rule) for x in amb.reunioes.app.url_map.iter_rules()] if not r.startswith(A.SEM_FUZZ)}
     funcs = sorted(n for n in dir(amb.db) if not n.startswith("_") and callable(getattr(amb.db, n))
                    and getattr(getattr(amb.db, n), "__module__", "") == "db" and n not in ("conexao", "agora", "criar_tabelas", "copia_de_seguranca"))
-    print(f"catalogo v9: {len(A9.ACOES9)} acoes ({sum(a.hostil for a in A9.ACOES9)} hostis, {sum(not a.hostil for a in A9.ACOES9)} legitimas)")
+    print(f"catalogo v10: {len(A10.ACOES10)} acoes ({sum(a.hostil for a in A10.ACOES10)} hostis, {sum(not a.hostil for a in A10.ACOES10)} legitimas)")
     sem_rota = [r for r in rotas if r not in cobertas]
     print("rotas sem acao:", sem_rota or "nenhuma")
     print("funcoes de db sem acao:", [f for f in funcs if "db." + f not in cobertas] or "nenhuma")
     print("fora do alcance (por que):")
-    for k, v in A9.SEM_ACAO.items():
+    for k, v in A10.SEM_ACAO.items():
         print(f"  {k}: {v}")
     ref = AQUI / "cobertura.json"
     atual = {"rotas": rotas, "funcoes": funcs}
@@ -52,7 +53,7 @@ def cobertura():
         print("NOVO desde a ultima medicao:", novas or "nada")
     ref.write_text(json.dumps(atual, indent=1), encoding="utf-8")
     # o que nao tem acao nem explicacao em SEM_ACAO reprova (o gancho pre-push usa isto)
-    sem_explicacao = [x for x in sem_rota + ["db." + f for f in funcs if "db." + f not in cobertas] if x not in A9.SEM_ACAO]
+    sem_explicacao = [x for x in sem_rota + ["db." + f for f in funcs if "db." + f not in cobertas] if x not in A10.SEM_ACAO]
     if sem_explicacao:
         print("SEM EXPLICACAO:", sem_explicacao)
     return len(sem_explicacao)
@@ -84,7 +85,7 @@ def main():
     ap.add_argument("--sementes", type=int, default=10)
     ap.add_argument("--semente")
     ap.add_argument("--base", type=int, default=1000, help="primeira semente numerica")
-    ap.add_argument("--catalogo", default="v9", choices=["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9"])
+    ap.add_argument("--catalogo", default="v10", choices=["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10"])
     ap.add_argument("--falar", action="store_true")
     ap.add_argument("--reduzir", action="store_true")
     ap.add_argument("--so", default="", help="so reduz/mostra chaves que contenham este texto")

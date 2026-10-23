@@ -1,0 +1,10 @@
+{
+  "semente": "1000",
+  "passos": [
+    179
+  ],
+  "chave": "I57-erro-juntou-pela-metade",
+  "catalogo": "v10",
+  "carimbo": "3e20063b7549",
+  "msg": "A: erro/direto (intervalo 518s, trilhas anterior ['voce', 'outros'] nova ['voce', 'outros'], 1000 Hz): juntar_wavs falhou na chamada 2 de 2 e a anterior ficou com ['20261022-223811-agj-a-voce.wav'] alterada(s) enquanto a nova continua pendente com os mesmos audios (uma nova tentativa juntaria de novo e duplicaria)"
+}

@@ -15,3 +15,5 @@ janela.log
 janela.log.*
 excluidos.json
 convites.json
+agenda_local.json
+agenda_local.tmp
